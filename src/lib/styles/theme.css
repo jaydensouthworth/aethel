@@ -1,0 +1,208 @@
+/* Aethel Theme System - Centralized Design Tokens */
+
+:root {
+  /* ==================== SURFACES ==================== */
+  --surface-base: #ffffff;
+  --surface-raised: #f8fafc;
+  --surface-sunken: #f1f5f9;
+  --surface-overlay: #ffffff;
+
+  /* ==================== TEXT ==================== */
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --text-inverse: #ffffff;
+
+  /* ==================== BORDERS ==================== */
+  --border-subtle: #e2e8f0;
+  --border-default: #cbd5e1;
+  --border-strong: #94a3b8;
+
+  /* ==================== INTERACTIVE ==================== */
+  --hover-bg: rgba(0, 0, 0, 0.04);
+  --selected-bg: rgba(59, 130, 246, 0.1);
+  --focus-ring: #3b82f6;
+  --active-bg: rgba(0, 0, 0, 0.08);
+
+  /* ==================== SEMANTIC COLORS ==================== */
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+
+  /* ==================== OBJECT TYPE COLORS ==================== */
+  --color-chapter: #8b5cf6;
+  --color-scene: #06b6d4;
+  --color-character: #06b6d4;
+  --color-location: #22c55e;
+  --color-item: #f59e0b;
+  --color-event: #ec4899;
+  --color-note: #64748b;
+
+  /* ==================== EDITOR REFERENCE COLORS ==================== */
+  --ref-character: #0891b2;
+  --ref-character-bg: #ecfeff;
+  --ref-location: #16a34a;
+  --ref-location-bg: #f0fdf4;
+  --ref-item: #d97706;
+  --ref-item-bg: #fffbeb;
+  --ref-chapter: #7c3aed;
+  --ref-chapter-bg: #f5f3ff;
+  --ref-unknown: #d97706;
+  --ref-unknown-bg: #fef3c7;
+
+  /* ==================== TIMELINE ==================== */
+  --timeline-bg: var(--surface-sunken);
+  --timeline-track: var(--border-default);
+  --timeline-gap-line: var(--border-subtle);
+  --timeline-block-bg: var(--surface-raised);
+  --timeline-block-border: var(--border-default);
+  --timeline-block-selected: var(--color-primary);
+
+  /* ==================== SPACING ==================== */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* ==================== BORDER RADIUS ==================== */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* ==================== SHADOWS ==================== */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+  /* ==================== TRANSITIONS ==================== */
+  --transition-fast: 0.1s ease;
+  --transition-normal: 0.15s ease;
+  --transition-slow: 0.2s ease;
+
+  /* ==================== TYPOGRAPHY ==================== */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 24px;
+  --font-size-3xl: 32px;
+}
+
+/* ==================== DARK THEME ==================== */
+[data-theme="dark"] {
+  /* Surfaces */
+  --surface-base: #0f0f0f;
+  --surface-raised: #1a1a1a;
+  --surface-sunken: #141414;
+  --surface-overlay: #1e1e1e;
+
+  /* Text */
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-inverse: #0f172a;
+
+  /* Borders */
+  --border-subtle: #2a2a2a;
+  --border-default: #3a3a3a;
+  --border-strong: #4a4a4a;
+
+  /* Interactive */
+  --hover-bg: rgba(255, 255, 255, 0.04);
+  --selected-bg: rgba(59, 130, 246, 0.2);
+  --active-bg: rgba(255, 255, 255, 0.08);
+
+  /* Editor Reference Colors (darker backgrounds) */
+  --ref-character-bg: rgba(8, 145, 178, 0.15);
+  --ref-location-bg: rgba(22, 163, 74, 0.15);
+  --ref-item-bg: rgba(217, 119, 6, 0.15);
+  --ref-chapter-bg: rgba(124, 58, 237, 0.15);
+  --ref-unknown-bg: rgba(217, 119, 6, 0.2);
+
+  /* Timeline */
+  --timeline-bg: var(--surface-sunken);
+  --timeline-block-bg: var(--surface-raised);
+
+  /* Shadows (more subtle in dark mode) */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+}
+
+/* ==================== EDITOR-SPECIFIC STYLES ==================== */
+.cm-object-ref {
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.cm-object-ref:hover {
+  filter: brightness(0.95);
+}
+
+.cm-object-ref[data-type="character"] {
+  color: var(--ref-character);
+  background: var(--ref-character-bg);
+}
+
+.cm-object-ref[data-type="location"] {
+  color: var(--ref-location);
+  background: var(--ref-location-bg);
+}
+
+.cm-object-ref[data-type="item"] {
+  color: var(--ref-item);
+  background: var(--ref-item-bg);
+}
+
+.cm-object-ref[data-type="chapter"],
+.cm-object-ref[data-type="scene"] {
+  color: var(--ref-chapter);
+  background: var(--ref-chapter-bg);
+}
+
+.cm-object-ref-unknown {
+  color: var(--ref-unknown);
+  background: var(--ref-unknown-bg);
+  text-decoration: underline wavy var(--ref-unknown);
+}
+
+/* ==================== COLLAPSIBLE BLOCKS ==================== */
+.cm-flashback-block {
+  background: var(--surface-sunken);
+  border-left: 3px solid var(--color-chapter);
+  margin: var(--space-sm) 0;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.cm-flashback-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-flashback-header:hover {
+  color: var(--text-primary);
+}
+
+.cm-flashback-toggle {
+  transition: transform var(--transition-fast);
+}
+
+.cm-flashback-toggle.expanded {
+  transform: rotate(90deg);
+}
