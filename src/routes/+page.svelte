@@ -87,6 +87,7 @@
   const selectedObject = $derived(ui.selectedObject);
   const selectedObjectType = $derived(selectedObject ? getObjectType(selectedObject.typeId) : null);
   const isContentType = $derived(selectedObjectType?.isContentType ?? false);
+  let lastTimelineTool = $state(timelineEditor.activeTool);
 
   // Track changes for auto-save
   let lastObjectsHash = $state('');
@@ -108,6 +109,39 @@
       project.markDirty();
     }
     lastObjectsHash = currentHash;
+  });
+
+  function getSplitTargetPlacementId(): string | null {
+    const selectedIds = Array.from(timelineEditor.selectedPlacementIds);
+    if (selectedIds.length > 0) return selectedIds[0];
+
+    if (!selectedObject) return null;
+    const placements = timeline.getPlacementsForObject(selectedObject.id);
+    if (placements.length === 0) return null;
+
+    const cursorPos = timeline.cursorPosition;
+    const atCursor = placements.find((p) => {
+      const end = p.endPosition ?? p.position;
+      return cursorPos >= p.position && cursorPos <= end;
+    });
+
+    return (atCursor ?? placements[0]).id;
+  }
+
+  $effect(() => {
+    const activeTool = timelineEditor.activeTool;
+    if (
+      activeTool === 'razor' &&
+      lastTimelineTool !== 'razor' &&
+      !splitDialogState.open
+    ) {
+      const placementId = getSplitTargetPlacementId();
+      if (placementId) {
+        openSplitDialog(placementId, timeline.cursorPosition);
+      }
+    }
+
+    lastTimelineTool = activeTool;
   });
 
   // Initialize on mount - try to restore auto-save first
