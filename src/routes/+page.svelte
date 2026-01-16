@@ -80,6 +80,7 @@
   let splitDialogState = $state({
     open: false,
     placementId: null as string | null,
+    position: null as number | null,
   });
 
   // Selected object for editing
@@ -417,6 +418,8 @@
 
   // Context menu handlers
   function handlePlacementContextMenu(e: MouseEvent, placement: TimelinePlacement) {
+    e.preventDefault();
+    e.stopPropagation();
     // Close any other menus first
     closeAllMenus();
 
@@ -428,7 +431,14 @@
     };
   }
 
+  function handlePlacementSplit(placement: TimelinePlacement, position: number) {
+    closeAllMenus();
+    openSplitDialog(placement.id, position);
+  }
+
   function handleTrackContextMenu(e: MouseEvent, trackIndex: number, position: number) {
+    e.preventDefault();
+    e.stopPropagation();
     closeAllMenus();
 
     trackMenuState = {
@@ -441,6 +451,8 @@
   }
 
   function handleTreeContextMenu(e: MouseEvent, obj: AethelObject) {
+    e.preventDefault();
+    e.stopPropagation();
     closeAllMenus();
 
     treeMenuState = {
@@ -484,10 +496,11 @@
     };
   }
 
-  function openSplitDialog(placementId: string) {
+  function openSplitDialog(placementId: string, position: number | null = null) {
     splitDialogState = {
       open: true,
       placementId,
+      position: position ?? timeline.cursorPosition,
     };
   }
 
@@ -615,6 +628,7 @@
     <div class="timeline-strip-wrapper">
       <TimelineStrip
         onplacementcontextmenu={handlePlacementContextMenu}
+        onplacementsplit={handlePlacementSplit}
         ontrackcontextmenu={handleTrackContextMenu}
         oncreateobject={handleTimelineCreateObject}
       />
@@ -685,6 +699,7 @@
 <SplitDialog
   open={splitDialogState.open}
   placementId={splitDialogState.placementId}
+  splitPosition={splitDialogState.position}
   onClose={() => splitDialogState.open = false}
 />
 

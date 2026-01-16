@@ -1,11 +1,25 @@
 <script lang="ts">
-  import { timeline, objects } from '$lib/stores';
+  import { onDestroy, tick } from 'svelte';
+  import { Editor } from '@tiptap/core';
+  import StarterKit from '@tiptap/starter-kit';
+  import type { JSONContent } from '@tiptap/core';
+  import { ObjectRef } from '$lib/editor/extensions';
+  import { timeline, objects, timelineEditor, timelineHistory } from '$lib/stores';
+  import { createObject, createPlacement, getObjectType } from '$lib/types';
+  import {
+    createAddObjectCommand,
+    createAddPlacementCommand,
+    createUpdateObjectCommand,
+    createUpdatePlacementCommand,
+  } from '$lib/services/timeline-commands';
   import * as ops from '$lib/services/timeline-operations';
 
   interface Props {
     open: boolean;
     /** Placement ID to split */
     placementId: string | null;
+    /** Optional initial split position on the timeline */
+    splitPosition?: number | null;
     /** Callback when dialog closes */
     onClose: () => void;
     /** Callback when split is complete */
@@ -15,25 +29,35 @@
   let {
     open,
     placementId,
+    splitPosition: splitPositionHint = null,
     onClose,
     onSplit,
   }: Props = $props();
 
   // Form state
   let splitPosition = $state(0);
+  let splitTextPosition = $state(0);
+
+  // TipTap editor for text splitting
+  let editor = $state<Editor | null>(null);
+  let editorElement = $state<HTMLDivElement | null>(null);
 
   // Derived state
   const placement = $derived(placementId ? timeline.getPlacement(placementId) : null);
   const obj = $derived(placement ? objects.get(placement.objectId) : null);
+  const objectType = $derived(obj ? getObjectType(obj.typeId) : null);
+  const isContentType = $derived(objectType?.isContentType ?? false);
   const hasRange = $derived(placement?.endPosition !== undefined);
   const minPosition = $derived(placement?.position ?? 0);
   const maxPosition = $derived(placement?.endPosition ?? placement?.position ?? 0);
   const rangeLength = $derived(maxPosition - minPosition);
 
-  // Initialize split position to middle of range when opened
+  // Initialize split position when opened
   $effect(() => {
     if (open && placement && hasRange) {
-      splitPosition = Math.round((minPosition + maxPosition) / 2);
+      const fallback = Math.round((minPosition + maxPosition) / 2);
+      const desired = splitPositionHint ?? fallback;
+      splitPosition = Math.min(Math.max(desired, minPosition + 1), maxPosition - 1);
     }
   });
 
@@ -43,21 +67,177 @@
   );
   const rightPercent = $derived(100 - leftPercent);
 
+  const textSplitBounds = $derived.by(() => {
+    if (!editor) return { min: 0, max: 0 };
+    const max = editor.state.doc.content.size;
+    return { min: 1, max: Math.max(1, max - 1) };
+  });
+
+  const canSplitText = $derived.by(() => {
+    if (!editor) return false;
+    const max = editor.state.doc.content.size;
+    return splitTextPosition > 1 && splitTextPosition < max - 1;
+  });
+
+  const canSplitTimeline = $derived(
+    splitPosition > minPosition && splitPosition < maxPosition
+  );
+
+  const canSubmit = $derived(
+    hasRange && canSplitTimeline && (!isContentType || canSplitText)
+  );
+
+  function createSplitObject(originalContent: JSONContent): ReturnType<typeof createObject> {
+    if (!obj || !placement) {
+      throw new Error('Missing object or placement for split');
+    }
+
+    const newObj = createObject(`${obj.name} (part 2)`, obj.typeId, obj.parentId);
+    newObj.content = originalContent;
+    newObj.aliases = [...obj.aliases];
+    newObj.attributes = obj.attributes ? JSON.parse(JSON.stringify(obj.attributes)) : [];
+    newObj.rendered = obj.rendered;
+    newObj.color = obj.color;
+    newObj.icon = obj.icon;
+
+    const siblings = objects.getChildren(obj.parentId);
+    const originalIndex = siblings.findIndex((s) => s.id === obj.id);
+    if (originalIndex >= 0 && originalIndex < siblings.length - 1) {
+      const nextSibling = siblings[originalIndex + 1];
+      newObj.sortOrder = ((obj.sortOrder ?? 0) + (nextSibling.sortOrder ?? 0)) / 2;
+    } else {
+      newObj.sortOrder = (obj.sortOrder ?? 0) + 1;
+    }
+
+    return newObj;
+  }
+
+  function splitEditorContent(): { before: JSONContent; after: JSONContent } | null {
+    if (!editor) return null;
+    const doc = editor.state.doc;
+    const max = doc.content.size;
+    const safePos = Math.max(1, Math.min(splitTextPosition, max - 1));
+    if (safePos <= 1 || safePos >= max - 1) return null;
+
+    const beforeDoc = doc.cut(0, safePos);
+    const afterDoc = doc.cut(safePos, max);
+    return {
+      before: beforeDoc.toJSON() as JSONContent,
+      after: afterDoc.toJSON() as JSONContent,
+    };
+  }
+
+  $effect(async () => {
+    if (!open || !obj || !isContentType) {
+      if (editor) {
+        editor.destroy();
+        editor = null;
+      }
+      return;
+    }
+
+    await tick();
+    if (!editorElement) return;
+
+    if (editor) {
+      editor.destroy();
+    }
+
+    editor = new Editor({
+      element: editorElement,
+      extensions: [
+        StarterKit.configure({
+          heading: { levels: [1, 2, 3] },
+        }),
+        ObjectRef.configure({
+          resolveObject: (text: string) => {
+            const match = objects.getByName(text);
+            if (!match) return null;
+            return {
+              id: match.id,
+              name: match.name,
+              color: objects.getEffectiveColor(match.id),
+            };
+          },
+        }),
+      ],
+      content: obj.content ?? { type: 'doc', content: [{ type: 'paragraph' }] },
+      editorProps: {
+        attributes: {
+          class: 'split-editor-content',
+        },
+        handleDOMEvents: {
+          beforeinput: () => true,
+          keydown: (_view, event) => {
+            if (
+              event.key === 'Backspace' ||
+              event.key === 'Delete' ||
+              event.key === 'Enter' ||
+              event.key.length === 1
+            ) {
+              event.preventDefault();
+              return true;
+            }
+            return false;
+          },
+        },
+      },
+      onSelectionUpdate: ({ editor }) => {
+        splitTextPosition = editor.state.selection.from;
+      },
+    });
+
+    splitTextPosition = editor.state.selection.from;
+  });
+
+  onDestroy(() => {
+    if (editor) {
+      editor.destroy();
+      editor = null;
+    }
+  });
+
   function handleSubmit(e: Event) {
     e.preventDefault();
     if (!placementId || !placement || !hasRange) return;
 
     // Validate split position
-    if (splitPosition <= minPosition || splitPosition >= maxPosition) {
+    if (!canSplitTimeline) return;
+
+    if (!isContentType || !editor || !obj) {
+      const result = ops.splitPlacement(placementId, splitPosition);
+      onSplit?.(result ? [result.before.id, result.after.id] : []);
+      onClose();
       return;
     }
 
-    const result = ops.splitPlacement(placementId, splitPosition);
-    if (result) {
-      onSplit?.([result.before.id, result.after.id]);
-    } else {
-      onSplit?.([]);
-    }
+    const contentSplit = splitEditorContent();
+    if (!contentSplit) return;
+
+    const newObj = createSplitObject(contentSplit.after);
+    const newPlacement = createPlacement(
+      newObj.id,
+      placement.type,
+      splitPosition,
+      placement.track,
+      {
+        endPosition: placement.endPosition,
+        mutation: placement.mutation,
+      }
+    );
+
+    const batch = timelineHistory.beginBatch(`Split "${obj.name}"`);
+    batch.add(createUpdateObjectCommand(obj.id, { content: contentSplit.before }));
+    batch.add(createAddObjectCommand(newObj));
+    batch.add(createUpdatePlacementCommand(placement.id, { endPosition: splitPosition }));
+    batch.add(createAddPlacementCommand(newPlacement));
+    batch.commit();
+
+    timelineEditor.clearSelection();
+    timelineEditor.select(placement.id, true);
+    timelineEditor.select(newPlacement.id, true);
+
+    onSplit?.([placement.id, newPlacement.id]);
     onClose();
   }
 
@@ -143,6 +323,25 @@
           </div>
         </div>
 
+        {#if isContentType}
+          <div class="form-group">
+            <label class="form-label">Split Text</label>
+            <div class="split-editor" bind:this={editorElement}></div>
+            <div class="split-hint">
+              Place the cursor where the text should split.
+              {#if editor}
+                <span class:invalid={!canSplitText}>
+                  Cursor {splitTextPosition} (valid {textSplitBounds.min}-{textSplitBounds.max})
+                </span>
+              {/if}
+            </div>
+          </div>
+        {:else}
+          <div class="split-hint muted">
+            This object has no text content. The split will only affect the timeline range.
+          </div>
+        {/if}
+
         <!-- Result preview -->
         <div class="result-preview">
           <div class="preview-label">Result:</div>
@@ -155,7 +354,7 @@
             <div class="split-arrow">→</div>
             <div class="preview-item" style:--item-color={objects.getEffectiveColor(obj.id)}>
               <span class="item-icon">{objects.getEffectiveIcon(obj.id)}</span>
-              <span class="item-name">{obj.name}</span>
+              <span class="item-name">{obj.name} (part 2)</span>
               <span class="item-range">{splitPosition} - {maxPosition}</span>
             </div>
           </div>
@@ -169,7 +368,7 @@
           <button
             type="submit"
             class="btn confirm"
-            disabled={splitPosition <= minPosition || splitPosition >= maxPosition}
+            disabled={!canSubmit}
           >
             Split
           </button>
@@ -228,6 +427,41 @@
 
   .form-group {
     margin-bottom: var(--space-md);
+  }
+
+  .split-editor {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background-color: var(--surface-base);
+    padding: var(--space-sm);
+    min-height: 160px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+
+  .split-editor :global(.split-editor-content) {
+    outline: none;
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+  }
+
+  .split-hint {
+    margin-top: var(--space-xs);
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
+    display: flex;
+    gap: var(--space-xs);
+    flex-wrap: wrap;
+  }
+
+  .split-hint.muted {
+    margin-bottom: var(--space-md);
+    color: var(--text-muted);
+  }
+
+  .split-hint .invalid {
+    color: var(--color-danger, #ef4444);
+    font-weight: 600;
   }
 
   .form-label {

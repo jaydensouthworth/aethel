@@ -17,7 +17,7 @@
   let { open, x, y, onClose, children }: Props = $props();
 
   // Adjust position to stay within viewport
-  const adjustedPosition = $derived(() => {
+  const adjustedPosition = $derived.by(() => {
     if (!open) return { x: 0, y: 0 };
 
     const menuWidth = 200; // Approximate menu width
@@ -64,8 +64,8 @@
 
   <div
     class="context-menu"
-    style:left="{adjustedPosition().x}px"
-    style:top="{adjustedPosition().y}px"
+    style:left="{adjustedPosition.x}px"
+    style:top="{adjustedPosition.y}px"
     role="menu"
   >
     {@render children()}

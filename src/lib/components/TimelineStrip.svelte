@@ -7,11 +7,12 @@
 
   interface Props {
     onplacementcontextmenu?: (e: MouseEvent, placement: TPlacement) => void;
+    onplacementsplit?: (placement: TPlacement, position: number) => void;
     ontrackcontextmenu?: (e: MouseEvent, track: number, position: number) => void;
     oncreateobject?: (track: number, position: number) => void;
   }
 
-  let { onplacementcontextmenu, ontrackcontextmenu, oncreateobject }: Props = $props();
+  let { onplacementcontextmenu, onplacementsplit, ontrackcontextmenu, oncreateobject }: Props = $props();
 
   let isDraggingCursor = $state(false);
   let tracksContainer = $state<HTMLDivElement | null>(null);
@@ -314,6 +315,13 @@
     onplacementcontextmenu?.(e, placement);
   }
 
+  function handlePlacementRazor(e: MouseEvent, placement: TPlacement) {
+    const position = screenToTimelinePosition(e.clientX);
+    const snappedPosition = timelineEditor.snapPosition(position);
+    timeline.setCursorPosition(Math.round(snappedPosition * 10) / 10);
+    onplacementsplit?.(placement, snappedPosition);
+  }
+
   // Build array of track indices
   const trackIndices = $derived(Array.from({ length: Math.max(trackCountValue, 1) }, (_, i) => i));
   const cursorLeftPercent = $derived(getCursorLeftPercent());
@@ -428,6 +436,7 @@
                       {placement}
                       hasRange={placement.endPosition != null}
                       oncontextmenu={(e) => handlePlacementContextMenu(e, placement)}
+                      onrazor={(e) => handlePlacementRazor(e, placement)}
                     />
                   </div>
                 {/each}

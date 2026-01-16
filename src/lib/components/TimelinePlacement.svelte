@@ -7,9 +7,10 @@
     placement: TPlacement;
     hasRange?: boolean;
     oncontextmenu?: (e: MouseEvent) => void;
+    onrazor?: (e: MouseEvent) => void;
   }
 
-  let { placement, hasRange = false, oncontextmenu }: Props = $props();
+  let { placement, hasRange = false, oncontextmenu, onrazor }: Props = $props();
 
   // Object data
   const obj = $derived(objects.get(placement.objectId));
@@ -31,6 +32,16 @@
   function handleMouseDown(e: MouseEvent) {
     // Don't handle if locked
     if (isLocked) return;
+
+    // Only handle left button; allow right-click to open context menus
+    if (e.button !== 0) return;
+
+    if (activeTool === 'razor') {
+      e.preventDefault();
+      e.stopPropagation();
+      onrazor?.(e);
+      return;
+    }
 
     // Prevent default to avoid text selection
     e.preventDefault();
@@ -125,6 +136,7 @@
         onmousedown={(e) => handleEdgeMouseDown(e, 'start')}
         role="slider"
         aria-label="Resize start"
+        aria-valuenow={0}
         tabindex="-1"
       ></div>
     {/if}
@@ -157,6 +169,7 @@
         onmousedown={(e) => handleEdgeMouseDown(e, 'end')}
         role="slider"
         aria-label="Resize end"
+        aria-valuenow={0}
         tabindex="-1"
       ></div>
     {/if}

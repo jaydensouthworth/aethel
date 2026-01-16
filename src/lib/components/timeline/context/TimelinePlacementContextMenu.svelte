@@ -212,7 +212,7 @@
       {#if hasRange}
         <ContextMenuItem onclick={handleSplit}>
           {#snippet icon()}/{/snippet}
-          Split at cursor
+          Split...
         </ContextMenuItem>
       {/if}
 

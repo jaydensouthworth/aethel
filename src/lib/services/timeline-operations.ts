@@ -541,6 +541,11 @@ export function splitPlacement(
 
 	batch.commit();
 
+	// Select both parts
+	timelineEditor.clearSelection();
+	timelineEditor.select(placementId, true);
+	timelineEditor.select(afterPlacement.id, true);
+
 	return {
 		before: { ...placement, endPosition: splitPosition },
 		after: afterPlacement,

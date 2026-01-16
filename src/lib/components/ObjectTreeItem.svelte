@@ -98,6 +98,7 @@
   // Context menu handler
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
+    e.stopPropagation();
     oncontextmenu?.(e, obj);
   }
 
