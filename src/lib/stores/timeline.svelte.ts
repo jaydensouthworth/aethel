@@ -12,9 +12,11 @@ import type {
   TimelineMarker,
   TimelinePlacement,
   MutationDisplay,
+  Milestone,
 } from '$lib/types';
 import { createPlacement } from '$lib/types';
 import { objects } from './objects.svelte';
+import { milestones } from './milestones.svelte';
 
 // ============================================================================
 // Types (exported for external use)
@@ -40,11 +42,24 @@ export interface TimelineCard {
 
 /**
  * Represents items in the timeline flow (cards, mutations between, milestones)
+ * Now uses unified position model
  */
 export type TimelineFlowItem =
-  | { type: 'card'; index: number; object: AethelObject; placement: TimelinePlacement | null }
-  | { type: 'mutation'; placement: TimelinePlacement; afterIndex: number }
-  | { type: 'milestone'; milestoneId: string; afterIndex: number };
+  | { type: 'card'; index: number; object: AethelObject; placement: TimelinePlacement | null; position: number }
+  | { type: 'mutation'; placement: TimelinePlacement; position: number }
+  | { type: 'milestone'; milestone: Milestone; position: number };
+
+/**
+ * Unified timeline item for position-based sorting
+ * All items (cards, milestones, mutations) are sorted together by position
+ */
+export type TimelineItem =
+  | { type: 'card'; item: AethelObject; position: number }
+  | { type: 'milestone'; item: Milestone; position: number }
+  | { type: 'mutation'; item: TimelinePlacement; position: number };
+
+// Position spacing constant
+const POSITION_SPACING = 1000;
 
 // ============================================================================
 // Constants
@@ -77,25 +92,81 @@ class TimelineStore {
 
   /**
    * Ordered rendered objects - the spine of the single-track timeline
-   * Sorted by: tree hierarchy (depth-first) then sortOrder
+   *
+   * Timeline ordering uses the unified position model:
+   * - All rendered objects are sorted globally by position
+   * - Objects without position fall back to tree position * POSITION_SPACING
+   * - This allows cards to be freely reordered regardless of parentId
+   *
+   * The tree structure (parentId) is preserved for the object panel,
+   * but the timeline uses flat position-based ordering.
    */
   renderedObjects = $derived.by(() => {
-    const rendered: AethelObject[] = [];
-
-    // Helper: recursively collect rendered objects in tree order
+    // First, get tree order for fallback positioning
+    const treeOrder: AethelObject[] = [];
     const collectRendered = (parentId: string | null) => {
       const children = objects.byParent.get(parentId) ?? [];
       for (const child of children) {
         if (child.rendered) {
-          rendered.push(child);
+          treeOrder.push(child);
         }
-        // Continue into children regardless of parent's rendered status
         collectRendered(child.id);
       }
     };
-
     collectRendered(null);
-    return rendered;
+
+    // If no positions have been set, return tree order
+    const hasAnyPosition = treeOrder.some(obj => obj.position !== undefined);
+    if (!hasAnyPosition) {
+      return treeOrder;
+    }
+
+    // Create fallback positions based on tree order
+    const treeFallback = new Map<string, number>();
+    treeOrder.forEach((obj, i) => treeFallback.set(obj.id, (i + 1) * POSITION_SPACING));
+
+    // Sort ALL rendered objects by position (global flat sort)
+    // Objects without position use tree fallback
+    return [...treeOrder].sort((a, b) => {
+      const aPos = a.position ?? treeFallback.get(a.id)!;
+      const bPos = b.position ?? treeFallback.get(b.id)!;
+      return aPos - bPos;
+    });
+  });
+
+  /**
+   * Get all timeline items (cards, milestones, mutations) sorted by position
+   * This is the unified view of the timeline for rendering
+   */
+  getAllItemsSorted = $derived.by((): TimelineItem[] => {
+    const items: TimelineItem[] = [];
+
+    // Collect cards (rendered objects with position)
+    for (const obj of this.renderedObjects) {
+      // Cards get their position or a fallback based on index
+      const idx = this.renderedObjects.indexOf(obj);
+      const position = obj.position ?? (idx + 1) * POSITION_SPACING;
+      items.push({ type: 'card', item: obj, position });
+    }
+
+    // Collect milestones
+    for (const milestone of milestones.all) {
+      items.push({ type: 'milestone', item: milestone, position: milestone.position });
+    }
+
+    // Collect mutations with display='between' and a position
+    for (const placement of this.allPlacements) {
+      if (
+        placement.type === 'mutation' &&
+        placement.mutationDisplay === 'between' &&
+        placement.position !== undefined
+      ) {
+        items.push({ type: 'mutation', item: placement, position: placement.position });
+      }
+    }
+
+    // Sort by position
+    return items.sort((a, b) => a.position - b.position);
   });
 
   /**
@@ -133,7 +204,7 @@ class TimelineStore {
 
   /**
    * Mutations that appear between cards (in the flow)
-   * Sorted by afterRenderedIndex
+   * Sorted by position
    */
   mutationsBetween = $derived.by(() => {
     return this.allPlacements
@@ -141,9 +212,9 @@ class TimelineStore {
         (p) =>
           p.type === 'mutation' &&
           p.mutationDisplay === 'between' &&
-          p.afterRenderedIndex !== undefined
+          p.position !== undefined
       )
-      .sort((a, b) => (a.afterRenderedIndex ?? 0) - (b.afterRenderedIndex ?? 0));
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
   });
 
   /**
@@ -208,6 +279,65 @@ class TimelineStore {
   }
 
   // ============================================================================
+  // Position Helpers
+  // ============================================================================
+
+  /**
+   * Calculate a position between two values (midpoint)
+   * Used for inserting items between existing items
+   */
+  getPositionBetween(before: number | null, after: number | null): number {
+    if (before === null && after === null) return POSITION_SPACING;
+    if (before === null) return after! - POSITION_SPACING;
+    if (after === null) return before + POSITION_SPACING;
+    return (before + after) / 2;
+  }
+
+  /**
+   * Get the position for a card by its object ID
+   */
+  getCardPosition(objectId: string): number | undefined {
+    const obj = objects.get(objectId);
+    if (!obj) return undefined;
+    if (obj.position !== undefined) return obj.position;
+    // Fallback to index-based position
+    const idx = this.getCardIndex(objectId);
+    return idx >= 0 ? (idx + 1) * POSITION_SPACING : undefined;
+  }
+
+  /**
+   * Get the effective position for an item at a given index
+   * Used when items don't have explicit positions yet
+   */
+  getPositionForIndex(index: number): number {
+    const obj = this.renderedObjects[index];
+    if (obj?.position !== undefined) return obj.position;
+    return (index + 1) * POSITION_SPACING;
+  }
+
+  /**
+   * Rebalance all positions to ensure clean spacing
+   * Called when positions get too close (gap < 1)
+   */
+  rebalancePositions(): Map<string, number> {
+    const newPositions = new Map<string, number>();
+    const items = this.getAllItemsSorted;
+
+    items.forEach((item, idx) => {
+      const newPos = (idx + 1) * POSITION_SPACING;
+      if (item.type === 'card') {
+        newPositions.set(item.item.id, newPos);
+      } else if (item.type === 'milestone') {
+        newPositions.set(item.item.id, newPos);
+      } else if (item.type === 'mutation') {
+        newPositions.set(item.item.id, newPos);
+      }
+    });
+
+    return newPositions;
+  }
+
+  // ============================================================================
   // Placement Operations
   // ============================================================================
 
@@ -264,18 +394,18 @@ class TimelineStore {
   }
 
   /**
-   * Add a mutation that appears between cards (v2)
+   * Add a mutation that appears between cards (v2 - position-based)
    */
   addMutationBetween(
     objectId: string,
-    afterRenderedIndex: number,
+    position: number,
     label: string,
     changes: Record<string, { from: unknown; to: unknown }>,
     threadIds?: string[]
   ): TimelinePlacement {
     const placement = createPlacement(objectId, 'mutation', {
       mutationDisplay: 'between',
-      afterRenderedIndex,
+      position,
       mutation: { label, changes },
       threadIds,
     });
@@ -309,23 +439,23 @@ class TimelineStore {
     display: MutationDisplay,
     options?: {
       attachedToObjectId?: string;
-      afterRenderedIndex?: number;
+      position?: number;
     }
   ): void {
     this.updatePlacement(placementId, {
       mutationDisplay: display,
       attachedToObjectId: display === 'below' ? options?.attachedToObjectId : undefined,
-      afterRenderedIndex: display === 'between' ? options?.afterRenderedIndex : undefined,
+      position: display === 'between' ? options?.position : undefined,
     });
   }
 
   /**
-   * Get mutations between two card indices
+   * Get mutations between two positions
    */
-  getMutationsBetweenIndices(startIndex: number, endIndex: number): TimelinePlacement[] {
+  getMutationsBetweenPositions(startPosition: number, endPosition: number): TimelinePlacement[] {
     return this.mutationsBetween.filter((p) => {
-      const idx = p.afterRenderedIndex ?? -1;
-      return idx >= startIndex && idx < endIndex;
+      const pos = p.position ?? -1;
+      return pos >= startPosition && pos < endPosition;
     });
   }
 
@@ -414,33 +544,34 @@ class TimelineStore {
 
   /**
    * Get the computed state of an object at the current cursor position
-   * In v2, this considers mutations up to and including the current card index
+   * In v2, this considers mutations up to and including the current cursor position
    */
   getObjectStateAtCursor(objectId: string): ComputedObjectState {
     const currentIndex = this.cursorIndex;
+    const currentPosition = this.getPositionForIndex(currentIndex);
     const objectPlacements = this.getPlacementsForObject(objectId);
 
-    // For v2 model: filter mutations based on their position relative to cursor index
+    // For v2 model: filter mutations based on their position relative to cursor
     const relevantMutations = objectPlacements
       .filter((p) => {
         if (p.type !== 'mutation') return false;
 
-        // v2 model: check afterRenderedIndex or attachedToObjectId
-        if (p.afterRenderedIndex !== undefined) {
-          return p.afterRenderedIndex < currentIndex;
+        // v2 model: check position or attachedToObjectId
+        if (p.position !== undefined) {
+          return p.position < currentPosition;
         }
         if (p.attachedToObjectId) {
-          const attachedIndex = this.getCardIndex(p.attachedToObjectId);
-          return attachedIndex >= 0 && attachedIndex <= currentIndex;
+          const attachedPosition = this.getCardPosition(p.attachedToObjectId);
+          return attachedPosition !== undefined && attachedPosition <= currentPosition;
         }
 
         return false;
       })
       .sort((a, b) => {
-        // Sort by afterRenderedIndex
-        const aIdx = a.afterRenderedIndex ?? 0;
-        const bIdx = b.afterRenderedIndex ?? 0;
-        return aIdx - bIdx;
+        // Sort by position
+        const aPos = a.position ?? 0;
+        const bPos = b.position ?? 0;
+        return aPos - bPos;
       });
 
     const computedAttributes: Record<string, unknown> = {};
@@ -456,20 +587,20 @@ class TimelineStore {
       .filter((p) => {
         if (p.type !== 'mutation') return false;
 
-        if (p.afterRenderedIndex !== undefined) {
-          return p.afterRenderedIndex >= currentIndex;
+        if (p.position !== undefined) {
+          return p.position >= currentPosition;
         }
         if (p.attachedToObjectId) {
-          const attachedIndex = this.getCardIndex(p.attachedToObjectId);
-          return attachedIndex > currentIndex;
+          const attachedPosition = this.getCardPosition(p.attachedToObjectId);
+          return attachedPosition !== undefined && attachedPosition > currentPosition;
         }
 
         return false;
       })
       .sort((a, b) => {
-        const aIdx = a.afterRenderedIndex ?? 0;
-        const bIdx = b.afterRenderedIndex ?? 0;
-        return aIdx - bIdx;
+        const aPos = a.position ?? 0;
+        const bPos = b.position ?? 0;
+        return aPos - bPos;
       });
 
     return {

@@ -18,18 +18,9 @@ class MilestonesStore {
   // Derived State
   // ============================================================================
 
-  // All milestones as array, sorted by afterIndex
+  // All milestones as array, sorted by position
   all = $derived.by(() => {
-    return Object.values(this._milestonesById).sort((a, b) => a.afterIndex - b.afterIndex);
-  });
-
-  // Milestones grouped by the index they appear after
-  byAfterIndex = $derived.by(() => {
-    const map = new Map<number, Milestone>();
-    for (const milestone of this.all) {
-      map.set(milestone.afterIndex, milestone);
-    }
-    return map;
+    return Object.values(this._milestonesById).sort((a, b) => a.position - b.position);
   });
 
   // Get the raw map (for imperative access)
@@ -68,25 +59,11 @@ class MilestonesStore {
   }
 
   /**
-   * Get milestone that appears after a specific rendered index
-   */
-  getMilestoneAfterIndex(index: number): Milestone | undefined {
-    return this.byAfterIndex.get(index);
-  }
-
-  /**
-   * Check if there's a milestone after a given index
-   */
-  hasMilestoneAfterIndex(index: number): boolean {
-    return this.byAfterIndex.has(index);
-  }
-
-  /**
    * Create and add a new milestone
    */
   create(
     name: string,
-    afterIndex: number,
+    position: number,
     options?: {
       color?: string;
       description?: string;
@@ -94,7 +71,7 @@ class MilestonesStore {
       exportTitle?: string;
     }
   ): Milestone {
-    const milestone = createMilestoneFn(name, afterIndex, options);
+    const milestone = createMilestoneFn(name, position, options);
     this.add(milestone);
     return milestone;
   }
@@ -106,62 +83,24 @@ class MilestonesStore {
   /**
    * Move a milestone to a new position
    */
-  move(id: string, newAfterIndex: number): void {
-    this.update(id, { afterIndex: newAfterIndex });
+  move(id: string, newPosition: number): void {
+    this.update(id, { position: newPosition });
   }
 
   /**
-   * Shift all milestones at or after a given index by a delta
-   * Useful when cards are inserted/removed
+   * Get the milestone at or before a given position
+   * Returns the most recent milestone before this position
    */
-  shiftAfter(startIndex: number, delta: number): void {
-    for (const milestone of this.all) {
-      if (milestone.afterIndex >= startIndex) {
-        this.update(milestone.id, {
-          afterIndex: Math.max(0, milestone.afterIndex + delta),
-        });
-      }
-    }
-  }
-
-  /**
-   * Get the section name for a given card index
-   * Returns the most recent milestone name before or at this index
-   */
-  getSectionForIndex(index: number): Milestone | undefined {
+  getMilestoneForPosition(position: number): Milestone | undefined {
     let currentSection: Milestone | undefined;
     for (const milestone of this.all) {
-      if (milestone.afterIndex < index) {
+      if (milestone.position < position) {
         currentSection = milestone;
       } else {
         break;
       }
     }
     return currentSection;
-  }
-
-  /**
-   * Get all card indices that belong to a milestone's section
-   * Returns [startIndex, endIndex) range
-   */
-  getSectionRange(milestoneId: string, totalCards: number): [number, number] | undefined {
-    const milestone = this._milestonesById[milestoneId];
-    if (!milestone) return undefined;
-
-    const startIndex = milestone.afterIndex + 1;
-
-    // Find next milestone
-    const sortedMilestones = this.all;
-    const currentIdx = sortedMilestones.findIndex((m) => m.id === milestoneId);
-
-    let endIndex: number;
-    if (currentIdx < sortedMilestones.length - 1) {
-      endIndex = sortedMilestones[currentIdx + 1].afterIndex + 1;
-    } else {
-      endIndex = totalCards;
-    }
-
-    return [startIndex, endIndex];
   }
 
   // ============================================================================

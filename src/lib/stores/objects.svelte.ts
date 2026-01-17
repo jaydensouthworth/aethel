@@ -17,8 +17,12 @@ class ObjectsStore {
   // Derived State
   // ============================================================================
 
-  // All objects as array
-  all = $derived(Object.values(this._objectsById));
+  // All objects as array - use $derived.by for explicit dependency tracking
+  all = $derived.by(() => {
+    // Access _objectsById explicitly to ensure reactivity tracking
+    const byId = this._objectsById;
+    return Object.values(byId);
+  });
 
   // Thread objects (objects that can be used as narrative threads)
   threadObjects = $derived(this.all.filter((o) => o.isThread));
@@ -70,36 +74,50 @@ class ObjectsStore {
   // ============================================================================
 
   add(obj: AethelObject): void {
-    this._objectsById[obj.id] = obj;
+    // Create new object reference to ensure reactivity
+    this._objectsById = {
+      ...this._objectsById,
+      [obj.id]: obj,
+    };
   }
 
   update(id: string, updates: Partial<AethelObject>): void {
     if (!this._objectsById[id]) return;
-    this._objectsById[id] = {
-      ...this._objectsById[id],
-      ...updates,
-      updatedAt: new Date().toISOString(),
+    // Create a completely new object reference to ensure Svelte 5 reactivity triggers
+    this._objectsById = {
+      ...this._objectsById,
+      [id]: {
+        ...this._objectsById[id],
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      },
     };
   }
 
   delete(id: string): void {
-    // Find children first
-    const childIds = Object.values(this._objectsById)
-      .filter((obj) => obj.parentId === id)
-      .map((obj) => obj.id);
+    // Collect all IDs to delete (object + all descendants)
+    const idsToDelete = new Set<string>();
 
-    // Delete current object
-    delete this._objectsById[id];
-
-    // Delete children recursively
-    const deleteRecursive = (deleteId: string) => {
-      delete this._objectsById[deleteId];
-      Object.values(this._objectsById)
-        .filter((obj) => obj.parentId === deleteId)
-        .forEach((child) => deleteRecursive(child.id));
+    const collectDescendants = (objId: string) => {
+      idsToDelete.add(objId);
+      for (const obj of Object.values(this._objectsById)) {
+        if (obj.parentId === objId) {
+          collectDescendants(obj.id);
+        }
+      }
     };
 
-    childIds.forEach(deleteRecursive);
+    collectDescendants(id);
+
+    // Create new object without deleted IDs
+    const newObjectsById: Record<string, AethelObject> = {};
+    for (const [objId, obj] of Object.entries(this._objectsById)) {
+      if (!idsToDelete.has(objId)) {
+        newObjectsById[objId] = obj;
+      }
+    }
+
+    this._objectsById = newObjectsById;
   }
 
   get(id: string): AethelObject | undefined {

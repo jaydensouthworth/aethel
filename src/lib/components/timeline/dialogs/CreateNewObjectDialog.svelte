@@ -4,11 +4,11 @@
 
   interface Props {
     open: boolean;
-    afterIndex: number;
+    position: number;
     onClose: () => void;
   }
 
-  let { open, afterIndex, onClose }: Props = $props();
+  let { open, position, onClose }: Props = $props();
 
   let name = $state('');
   let selectedTypeId = $state('chapter');
@@ -53,7 +53,7 @@
   <div class="backdrop" onclick={handleBackdropClick}>
     <div class="dialog" role="dialog" aria-modal="true">
       <h2 class="title">Create New Object</h2>
-      <p class="subtitle">Will appear on timeline after card #{afterIndex + 1}</p>
+      <p class="subtitle">Will appear at position {Math.round(position)}</p>
 
       <form onsubmit={handleSubmit}>
         <div class="field">

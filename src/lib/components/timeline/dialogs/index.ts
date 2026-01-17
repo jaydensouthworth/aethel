@@ -11,3 +11,4 @@ export { default as AddMutationDialog } from './AddMutationDialog.svelte';
 export { default as AddExistingObjectDialog } from './AddExistingObjectDialog.svelte';
 export { default as CreateNewObjectDialog } from './CreateNewObjectDialog.svelte';
 export { default as MutationDropDialog } from './MutationDropDialog.svelte';
+export { default as CardDropDialog } from './CardDropDialog.svelte';

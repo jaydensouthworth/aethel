@@ -5,11 +5,11 @@
 
   interface Props {
     open: boolean;
-    afterIndex: number;
+    position: number;
     onClose: () => void;
   }
 
-  let { open, afterIndex, onClose }: Props = $props();
+  let { open, position, onClose }: Props = $props();
 
   let searchQuery = $state('');
   let selectedObjectId = $state<string | null>(null);
@@ -71,7 +71,7 @@
   <div class="backdrop" onclick={handleBackdropClick}>
     <div class="dialog" role="dialog" aria-modal="true">
       <h2 class="title">Add Existing Object</h2>
-      <p class="subtitle">Insert after card #{afterIndex + 1}</p>
+      <p class="subtitle">Insert at position {Math.round(position)}</p>
 
       <form onsubmit={handleSubmit}>
         <div class="field">

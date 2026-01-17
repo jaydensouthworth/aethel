@@ -108,13 +108,16 @@ export interface AethelObject {
   color?: string; // Custom color (null/undefined = inherit from parent or type default)
   icon?: string; // Custom icon (null/undefined = inherit from parent or type default)
 
-  // Ordering within parent
-  sortOrder?: number; // For manual ordering (lower = earlier)
+  // Ordering within parent (tree panel)
+  sortOrder?: number; // For manual ordering in tree (lower = earlier)
+
+  // Timeline position (unified linear model)
+  position?: number; // Position in timeline (all items sorted by this value)
 
   // Book output
   rendered: boolean; // Include in book output?
 
-  // Timeline positioning
+  // Timeline stacking
   timelineSlot?: number; // Cards with same slot number are stacked (simultaneous events)
 
   // Content
@@ -146,8 +149,8 @@ export interface Milestone {
   name: string;
   color?: string;
   description?: string;
-  // Position: after which rendered object index this milestone appears
-  afterIndex: number;
+  // Timeline position (unified linear model - all items sorted by this value)
+  position: number;
   // Export metadata
   exportAs?: 'part' | 'act' | 'section' | 'book';
   exportTitle?: string;
@@ -171,23 +174,21 @@ export interface TimelinePlacement {
   objectId: string; // Reference to AethelObject
   type: 'creation' | 'mutation'; // What kind of placement
 
-  // === Single-track positioning (v2) ===
+  // === Unified position model ===
   // For mutations with 'below' display: attach to this card
   attachedToObjectId?: string;
-  // For mutations with 'between' display: position after this rendered index
-  afterRenderedIndex?: number;
+  // For mutations with 'between' display: timeline position (unified linear model)
+  position?: number;
   // How this mutation is displayed (only for type: 'mutation')
   mutationDisplay?: MutationDisplay;
   // Thread associations (many-to-many)
   threadIds?: string[];
 
-  // === Legacy track-based positioning (v1 - kept for migration) ===
-  /** @deprecated Use single-track model instead */
-  track?: number; // Track index (0, 1, 2...)
-  /** @deprecated Use afterRenderedIndex instead */
-  position?: number; // Start position on timeline
-  /** @deprecated No longer used in single-track model */
-  endPosition?: number; // Optional end (for ranges)
+  // === Legacy fields (kept for reference) ===
+  /** @deprecated Use position instead */
+  track?: number;
+  /** @deprecated Use position instead */
+  endPosition?: number;
 
   // For mutations only
   mutation?: {
@@ -339,7 +340,7 @@ export function createObject(
 }
 
 /**
- * Create a new timeline placement (v2 - single-track model)
+ * Create a new timeline placement (unified position model)
  */
 export function createPlacement(
   objectId: string,
@@ -348,14 +349,11 @@ export function createPlacement(
     // For mutations: display mode
     mutationDisplay?: MutationDisplay;
     attachedToObjectId?: string; // For 'below' display
-    afterRenderedIndex?: number; // For 'between' display
+    position?: number; // For 'between' display - unified timeline position
     // Thread associations
     threadIds?: string[];
     // Mutation data
     mutation?: { label: string; changes: Record<string, { from: unknown; to: unknown }> };
-    // Legacy support
-    position?: number;
-    track?: number;
   }
 ): TimelinePlacement {
   const now = new Date().toISOString();
@@ -363,15 +361,11 @@ export function createPlacement(
     id: createObjectId(),
     objectId,
     type,
-    // v2 fields
     mutationDisplay: options?.mutationDisplay,
     attachedToObjectId: options?.attachedToObjectId,
-    afterRenderedIndex: options?.afterRenderedIndex,
+    position: options?.position,
     threadIds: options?.threadIds,
     mutation: options?.mutation,
-    // Legacy fields (for migration compatibility)
-    track: options?.track,
-    position: options?.position,
     createdAt: now,
     updatedAt: now,
   };
@@ -382,7 +376,7 @@ export function createPlacement(
  */
 export function createMilestone(
   name: string,
-  afterIndex: number,
+  position: number,
   options?: {
     color?: string;
     description?: string;
@@ -394,7 +388,7 @@ export function createMilestone(
   return {
     id: createObjectId(),
     name,
-    afterIndex,
+    position,
     color: options?.color,
     description: options?.description,
     exportAs: options?.exportAs,

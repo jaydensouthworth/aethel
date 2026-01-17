@@ -262,6 +262,7 @@
     // Chapters (rendered) - parented under Chapters folder - with object references!
     const ch1 = createObject('The Long-Expected Party', 'chapter', chaptersFolder.id);
     ch1.rendered = true;
+    ch1.position = 1000;
     ch1.content = {
       type: 'doc',
       content: [
@@ -300,6 +301,7 @@
 
     const ch2 = createObject('The Shadow of the Past', 'chapter', chaptersFolder.id);
     ch2.rendered = true;
+    ch2.position = 2000;
     ch2.timelineSlot = 1; // Same slot as ch2b - these happen simultaneously
     ch2.content = {
       type: 'doc',
@@ -318,6 +320,7 @@
     // Parallel chapter - happens at the same time as ch2 (Gandalf's POV)
     const ch2b = createObject("Gandalf's Research", 'chapter', chaptersFolder.id);
     ch2b.rendered = true;
+    ch2b.position = 2000; // Same position as ch2 - stacked together
     ch2b.timelineSlot = 1; // Same slot as ch2 - stacked together
     ch2b.content = {
       type: 'doc',
@@ -337,6 +340,7 @@
 
     const ch3 = createObject('Three is Company', 'chapter', chaptersFolder.id);
     ch3.rendered = true;
+    ch3.position = 3000;
     ch3.content = {
       type: 'doc',
       content: [
@@ -357,6 +361,7 @@
     // Scenes - parented under Scenes folder
     const scene1 = createObject("Bilbo's Adventure", 'scene', scenesFolder.id);
     scene1.rendered = true;
+    scene1.position = 4000;
     scene1.content = {
       type: 'doc',
       content: [
@@ -411,10 +416,11 @@
     // Scene appears in the flow (between chapters)
     timeline.addCreationV2(scene1.id);
 
-    // Create a milestone (Act/Part divider)
-    const act1 = createMilestone('Act I: The Shire', 1);
-    act1.color = '#6366f1';
-    act1.exportAs = 'act';
+    // Create a milestone (Act/Part divider) - position 1500 = between ch1 (1000) and ch2 (2000)
+    const act1 = createMilestone('Act I: The Shire', 1500, {
+      color: '#6366f1',
+      exportAs: 'act',
+    });
     milestones.add(act1);
 
     // Character mutations - attached below relevant chapters, with thread associations
@@ -443,9 +449,10 @@
     );
 
     // Standalone mutation between chapters (off-screen event)
+    // Position 1250 = between ch1 (1000) and milestone (1500)
     timeline.addMutationBetween(
       gandalf.id,
-      0, // after first card
+      1250,
       'Gandalf researches the Ring',
       { knowledge: { from: 'suspicious', to: 'certain' } },
       [ringThread.id]

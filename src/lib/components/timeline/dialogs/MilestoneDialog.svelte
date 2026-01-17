@@ -3,12 +3,12 @@
 
   interface Props {
     open: boolean;
-    afterIndex: number;
+    position: number;
     milestoneId?: string | null;
     onClose: () => void;
   }
 
-  let { open, afterIndex, milestoneId = null, onClose }: Props = $props();
+  let { open, position, milestoneId = null, onClose }: Props = $props();
 
   let name = $state('');
   let description = $state('');
@@ -68,7 +68,7 @@
         ...options,
       });
     } else {
-      milestones.create(name.trim(), afterIndex, options);
+      milestones.create(name.trim(), position, options);
     }
 
     onClose();
@@ -98,7 +98,7 @@
   <div class="backdrop" onclick={handleBackdropClick}>
     <div class="dialog" role="dialog" aria-modal="true">
       <h2 class="title">{isEditing ? 'Edit Milestone' : 'Add Milestone'}</h2>
-      <p class="subtitle">After card #{afterIndex + 1}</p>
+      <p class="subtitle">At position {Math.round(position)}</p>
 
       <form onsubmit={handleSubmit}>
         <div class="field">

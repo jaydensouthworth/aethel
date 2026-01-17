@@ -26,6 +26,8 @@ import {
 	createReorderCardCommand,
 	createMoveMutationCommand,
 	createDuplicateMutationCommand,
+	createSwapCardsCommand,
+	createStackCardsCommand,
 } from './timeline-commands';
 import type { MutationDisplay } from '$lib/types';
 
@@ -170,7 +172,7 @@ export function addPlacementsToThread(placementIds: string[], threadId: string):
  */
 export function createMilestone(
 	name: string,
-	afterIndex: number,
+	position: number,
 	options?: {
 		color?: string;
 		description?: string;
@@ -178,7 +180,7 @@ export function createMilestone(
 		exportTitle?: string;
 	}
 ): Milestone {
-	const milestone = createMilestoneType(name, afterIndex, options);
+	const milestone = createMilestoneType(name, position, options);
 	const command = createAddMilestoneCommand(milestone);
 	timelineHistory.execute(command);
 	return milestone;
@@ -206,8 +208,8 @@ export function deleteMilestone(milestoneId: string): void {
 /**
  * Move a milestone to a new position
  */
-export function moveMilestone(milestoneId: string, newAfterIndex: number): void {
-	const command = createMoveMilestoneCommand(milestoneId, newAfterIndex);
+export function moveMilestone(milestoneId: string, newPosition: number): void {
+	const command = createMoveMilestoneCommand(milestoneId, newPosition);
 	timelineHistory.execute(command);
 }
 
@@ -218,9 +220,9 @@ export function moveMilestone(milestoneId: string, newAfterIndex: number): void 
 /**
  * Set a mutation to display between cards (in the flow)
  */
-export function setMutationDisplayBetween(placementId: string, afterIndex: number): void {
+export function setMutationDisplayBetween(placementId: string, position: number): void {
 	const command = createChangeMutationDisplayCommand(placementId, 'between', {
-		afterRenderedIndex: afterIndex,
+		position,
 	});
 	timelineHistory.execute(command);
 }
@@ -236,18 +238,18 @@ export function setMutationDisplayBelow(placementId: string, attachedToObjectId:
 }
 
 /**
- * Add a mutation between cards (v2)
+ * Add a mutation between cards (v2 - position-based)
  */
 export function addMutationBetweenV2(
 	objectId: string,
-	afterRenderedIndex: number,
+	position: number,
 	label: string,
 	changes: Record<string, { from: unknown; to: unknown }> = {},
 	threadIds?: string[]
 ): TimelinePlacement {
 	const placement = createPlacement(objectId, 'mutation', {
 		mutationDisplay: 'between',
-		afterRenderedIndex,
+		position,
 		mutation: { label, changes },
 		threadIds,
 	});
@@ -389,34 +391,42 @@ export function navigateToObject(objectId: string): void {
 // ============================================================================
 
 /**
- * Reorder a card in the timeline by changing its sortOrder
- * targetIndex is the position to insert at (0-indexed)
+ * Reorder a card in the timeline by changing its position.
+ * newPosition is the unified position value to assign.
+ *
+ * This uses the unified position model where all items are sorted by position.
+ * The position value determines where in the timeline the card appears.
  */
-export function reorderCard(objectId: string, targetIndex: number): void {
+export function reorderCard(objectId: string, newPosition: number): void {
 	const obj = objects.get(objectId);
 	if (!obj) return;
 
-	// Calculate new sortOrder based on target position
-	const renderedObjects = timeline.renderedObjects;
-	let newSortOrder: number;
+	// Debug: Log the reorder operation
+	console.log('[reorderCard]', {
+		card: obj.name,
+		oldPosition: obj.position,
+		newPosition,
+	});
 
-	if (targetIndex <= 0) {
-		// Move to beginning
-		const first = renderedObjects[0];
-		newSortOrder = (first?.sortOrder ?? 0) - 1;
-	} else if (targetIndex >= renderedObjects.length) {
-		// Move to end
-		const last = renderedObjects[renderedObjects.length - 1];
-		newSortOrder = (last?.sortOrder ?? 0) + 1;
-	} else {
-		// Insert between two cards
-		const before = renderedObjects[targetIndex - 1];
-		const after = renderedObjects[targetIndex];
-		newSortOrder = ((before?.sortOrder ?? 0) + (after?.sortOrder ?? 0)) / 2;
+	// If position hasn't changed, skip
+	if (obj.position === newPosition) {
+		console.log('[reorderCard] No change detected, skipping');
+		return;
 	}
 
-	const command = createReorderCardCommand(objectId, newSortOrder);
+	// Clear timelineSlot to unstack the card from any group
+	const shouldClearSlot = obj.timelineSlot !== undefined;
+
+	const command = createReorderCardCommand(objectId, newPosition, shouldClearSlot);
 	timelineHistory.execute(command);
+
+	// Debug: verify the final order after commit
+	console.log('[reorderCard] After commit:', {
+		finalOrder: timeline.renderedObjects.map((o) => ({
+			name: o.name,
+			position: o.position,
+		})),
+	});
 }
 
 /**
@@ -424,13 +434,13 @@ export function reorderCard(objectId: string, targetIndex: number): void {
  */
 export function moveMutation(
 	placementId: string,
-	newPosition: {
+	newPos: {
 		display: MutationDisplay;
 		attachedToObjectId?: string;
-		afterRenderedIndex?: number;
+		position?: number;
 	}
 ): void {
-	const command = createMoveMutationCommand(placementId, newPosition);
+	const command = createMoveMutationCommand(placementId, newPos);
 	timelineHistory.execute(command);
 }
 
@@ -439,12 +449,28 @@ export function moveMutation(
  */
 export function duplicateMutation(
 	sourcePlacementId: string,
-	newPosition: {
+	newPos: {
 		display: MutationDisplay;
 		attachedToObjectId?: string;
-		afterRenderedIndex?: number;
+		position?: number;
 	}
 ): void {
-	const command = createDuplicateMutationCommand(sourcePlacementId, newPosition);
+	const command = createDuplicateMutationCommand(sourcePlacementId, newPos);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Swap positions between two cards
+ */
+export function swapCards(objectId1: string, objectId2: string): void {
+	const command = createSwapCardsCommand(objectId1, objectId2);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Stack a card in the same timeline slot as another card
+ */
+export function stackCards(draggedObjectId: string, targetObjectId: string): void {
+	const command = createStackCardsCommand(draggedObjectId, targetObjectId);
 	timelineHistory.execute(command);
 }
