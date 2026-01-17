@@ -617,46 +617,44 @@
     ui.select(objectId);
   }
 
-  function handleMutationClick(e: MouseEvent, mutation: TimelinePlacement, cardIndex?: number, isInline?: boolean) {
+  function handleMutationClick(e: MouseEvent, mutation: TimelinePlacement, indexParam?: number, isStandalone?: boolean) {
     e.stopPropagation();
     // Select the object this mutation belongs to
     ui.select(mutation.objectId);
     // Set this mutation as the active mutation for editing
     ui.setActiveMutation(mutation.id);
 
-    // For inline mutations (between cards), set anchor and navigate to mutation's timeslot
-    if (isInline) {
-      // Find the card index for this mutation's timeslot
+    // For standalone mutations (in a timeslot without a card), indexParam is the timeslot index
+    if (isStandalone || !mutation.attachedToCardId) {
+      // Navigate to the mutation's timeslot
       const timeslotIndex = timeline.getTimeslotIndex(mutation.timeslotId);
-      const targetIndex = Math.max(0, timeslotIndex);
-      // Navigate with anchor so user can return to previous position
-      timeline.navigateWithAnchor(targetIndex);
-      // Update selection state
-      const card = timeline.getCardAt(targetIndex);
-      if (card) {
-        timelineEditor.selectedCardId = card.object.id;
-        timelineEditor.selectedMutationIds = new Set();
+      if (timeslotIndex >= 0) {
+        timeline.navigateWithAnchor(timeslotIndex);
       }
+      // Don't try to select a card since there isn't one
+      timelineEditor.selectedCardId = null;
+      timelineEditor.selectedMutationIds = new Set();
       requestAnimationFrame(() => measureCursorPosition());
       return;
     }
 
-    // Move cursor to the card this mutation is attached to (with anchor)
-    if (cardIndex !== undefined) {
-      timeline.navigateWithAnchor(cardIndex);
-      const card = timeline.getCardAt(cardIndex);
-      if (card) {
-        timelineEditor.selectedCardId = card.object.id;
-        timelineEditor.selectedMutationIds = new Set();
-      }
-    } else if (mutation.attachedToCardId) {
-      const idx = timeline.getCardIndex(mutation.attachedToCardId);
-      if (idx >= 0) {
-        timeline.navigateWithAnchor(idx);
-        timelineEditor.selectedCardId = mutation.attachedToCardId;
-        timelineEditor.selectedMutationIds = new Set();
+    // For attached mutations, find the card and navigate to its timeslot
+    if (mutation.attachedToCardId) {
+      const cardIdx = timeline.getCardIndex(mutation.attachedToCardId);
+      if (cardIdx >= 0) {
+        const card = timeline.getCardAt(cardIdx);
+        if (card) {
+          // Navigate to the timeslot containing this card
+          const timeslotIndex = timeline.getTimeslotIndex(card.object.timeslotId!);
+          if (timeslotIndex >= 0) {
+            timeline.navigateWithAnchor(timeslotIndex);
+          }
+          timelineEditor.selectedCardId = mutation.attachedToCardId;
+          timelineEditor.selectedMutationIds = new Set();
+        }
       }
     }
+    requestAnimationFrame(() => measureCursorPosition());
   }
 
   let expandedConnectorKey = $state<string | null>(null);
@@ -1140,7 +1138,7 @@
                         draggable="true"
                         ondragstart={(e) => handleMutationDragStart(e, mutation.id)}
                         ondragend={handleMutationDragEnd}
-                        onclick={(e) => handleMutationClick(e, mutation, ts.index)}
+                        onclick={(e) => handleMutationClick(e, mutation, ts.index, true)}
                       >
                         <span class="mut-icon">~</span>
                         <span>{mutation.mutation?.label ?? 'Changed'}</span>
@@ -1151,26 +1149,28 @@
                 {/if}
               </div>
 
-              <!-- Add more button - absolutely positioned below -->
-              <button
-                class="timeslot-add-btn"
-                class:expanded={expandedTimeslotId === ts.timeslotId}
-                onclick={(e) => handleTimeslotAddClick(e, ts.timeslotId, ts.index)}
-                title="Add mutation, object, or milestone"
-              >+</button>
-              {#if expandedTimeslotId === ts.timeslotId}
-                <div class="timeslot-add-menu">
-                  <button onclick={() => { openMutationDialogForTimeslot(ts.timeslotId); }}>
-                    <span class="menu-icon">~</span> Add Mutation
-                  </button>
-                  <button onclick={() => { openAddExistingObjectDialogForTimeslot(ts.timeslotId); }}>
-                    <span class="menu-icon">›</span> Add Existing Object
-                  </button>
-                  <button onclick={() => { openCreateNewObjectDialogForTimeslot(ts.timeslotId); }}>
-                    <span class="menu-icon">+</span> Create New Object
-                  </button>
-                </div>
-              {/if}
+              <!-- Flow drop with + button - absolutely positioned below -->
+              <div class="timeslot-flow-drop" class:expanded={expandedTimeslotId === ts.timeslotId}>
+                <div class="flow-drop-line"></div>
+                <button
+                  class="node-btn"
+                  onclick={(e) => handleTimeslotAddClick(e, ts.timeslotId, ts.index)}
+                  title="Add mutation, object, or milestone"
+                >+</button>
+                {#if expandedTimeslotId === ts.timeslotId}
+                  <div class="node-menu">
+                    <button onclick={() => { openMutationDialogForTimeslot(ts.timeslotId); }}>
+                      <span class="menu-icon">~</span> Add Mutation
+                    </button>
+                    <button onclick={() => { openAddExistingObjectDialogForTimeslot(ts.timeslotId); }}>
+                      <span class="menu-icon">&#8250;</span> Add Existing Object
+                    </button>
+                    <button onclick={() => { openCreateNewObjectDialogForTimeslot(ts.timeslotId); }}>
+                      <span class="menu-icon">+</span> Create New Object
+                    </button>
+                  </div>
+                {/if}
+              </div>
             </div>
 
           {:else if item.type === 'milestone'}
@@ -1615,6 +1615,7 @@
     flex-direction: row;
     align-items: center;
     padding: var(--flow-padding-y) var(--flow-padding-x);
+    margin-bottom: 36px; /* Space for absolutely-positioned flow-drops below cards */
     min-width: max-content;
     position: relative;
     gap: var(--flow-gap);
@@ -1979,92 +1980,40 @@
     background: color-mix(in srgb, var(--mc) 15%, var(--surface-raised));
   }
 
-  /* Timeslot add button - absolutely positioned below content */
-  .timeslot-add-btn {
+  /* Flow drop - vertical line with + button, absolutely positioned below card-group */
+  .timeslot-flow-drop {
     position: absolute;
-    bottom: -10px;
+    bottom: 0;
     left: 50%;
-    transform: translateX(-50%);
-    width: 18px;
-    height: 18px;
+    transform: translateX(-50%) translateY(100%);
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-tertiary);
-    background: var(--surface-raised);
-    border: 1px dashed var(--border-subtle);
-    border-radius: 50%;
-    cursor: pointer;
-    opacity: 0;
-    transition: all 0.15s ease;
     z-index: 5;
   }
 
-  .card-group:hover .timeslot-add-btn,
-  .timeslot-add-btn.expanded {
-    opacity: 1;
+  .flow-drop-line {
+    width: 1.5px;
+    height: 14px;
+    background-color: var(--border-subtle);
   }
 
-  .timeslot-add-btn:hover {
-    background: var(--hover-bg);
-    border-color: var(--border-default);
-    color: var(--text-primary);
+
+  .timeslot-flow-drop.expanded .node-btn {
+    color: #fff;
+    background: var(--accent-primary, #3b82f6);
+    border-color: var(--accent-primary, #3b82f6);
+    transform: scale(1.12) rotate(45deg);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent-primary, #3b82f6) 15%, transparent),
+      0 4px 8px rgba(59, 130, 246, 0.25);
   }
 
-  .timeslot-add-menu {
-    position: absolute;
-    bottom: -10px;
-    left: 50%;
-    transform: translateX(-50%) translateY(100%);
-    margin-top: 4px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 6px;
-    background: var(--surface-raised);
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-    z-index: 50;
-    min-width: 160px;
+  .timeslot-flow-drop .node-menu {
+    /* Position relative to flow-drop, not connector */
+    top: calc(100% + 6px);
   }
 
-  .timeslot-add-menu button {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 10px;
-    font-size: 0.75rem;
-    font-weight: 500;
-    text-align: left;
-    color: var(--text-primary);
-    background: transparent;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background 0.1s;
-  }
-
-  .timeslot-add-menu button:hover {
-    background: var(--hover-bg);
-  }
-
-  .timeslot-add-menu .menu-icon {
-    width: 16px;
-    text-align: center;
-    font-size: 0.875rem;
-    color: var(--text-tertiary);
-  }
-
-  /* Inline mutation (between cards) */
-  .flow-item.inline-mut {
-    display: flex;
-    align-items: center;
-    padding: 0 var(--space-sm);
-  }
 
   /* Milestone marker */
   .flow-item.milestone-marker {
