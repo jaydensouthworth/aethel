@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { objects, timeline, ui, project, timelineEditor, threads, milestones } from '$lib/stores';
-  import { createObject, getObjectType, createThread, createMilestone } from '$lib/types';
+  import { objects, timeline, ui, project, timelineEditor, milestones } from '$lib/stores';
+  import { createObject, getObjectType, createMilestone } from '$lib/types';
   import type { TimelinePlacement, AethelObject } from '$lib/types';
   import ObjectTree from '$lib/components/ObjectTree.svelte';
   import ObjectPropertiesPanel from '$lib/components/ObjectPropertiesPanel.svelte';
@@ -300,6 +300,7 @@
 
     const ch2 = createObject('The Shadow of the Past', 'chapter', chaptersFolder.id);
     ch2.rendered = true;
+    ch2.timelineSlot = 1; // Same slot as ch2b - these happen simultaneously
     ch2.content = {
       type: 'doc',
       content: [
@@ -309,6 +310,26 @@
             { type: 'text', text: 'The talk did not die down in nine days, or even in ninety-nine. ' },
             ref(gandalf.id, 'Gandalf', charColor),
             { type: 'text', text: ' came to visit, bringing news of the wider world.' },
+          ],
+        },
+      ],
+    };
+
+    // Parallel chapter - happens at the same time as ch2 (Gandalf's POV)
+    const ch2b = createObject("Gandalf's Research", 'chapter', chaptersFolder.id);
+    ch2b.rendered = true;
+    ch2b.timelineSlot = 1; // Same slot as ch2 - stacked together
+    ch2b.content = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Meanwhile, ' },
+            ref(gandalf.id, 'Gandalf', charColor),
+            { type: 'text', text: ' traveled to Minas Tirith to search the archives for knowledge of ' },
+            ref(theRing.id, 'the Ring', itemColor),
+            { type: 'text', text: '.' },
           ],
         },
       ],
@@ -354,7 +375,7 @@
     shire.content = textToContent(`The peaceful homeland of the hobbits.`);
 
     // Add remaining content objects
-    [ch1, ch2, ch3, scene1, shire].forEach(
+    [ch1, ch2, ch2b, ch3, scene1, shire].forEach(
       (obj) => objects.add(obj)
     );
 
@@ -363,14 +384,18 @@
       (folder) => ui.setTreeExpanded(folder.id, true)
     );
 
-    // Create sample threads (narrative arcs)
-    const ringThread = createThread('The Ring', '#f59e0b');
-    ringThread.description = 'The journey of the One Ring';
-    threads.add(ringThread);
+    // Create thread objects (narrative arcs are now AethelObjects with isThread=true)
+    const ringThread = createObject("The Ring's Journey", 'folder');
+    ringThread.isThread = true;
+    ringThread.threadColor = '#f59e0b';
+    ringThread.color = '#f59e0b';
+    objects.add(ringThread);
 
-    const frodoThread = createThread("Frodo's Journey", '#3b82f6');
-    frodoThread.description = "Frodo's character arc";
-    threads.add(frodoThread);
+    const frodoThread = createObject("Frodo's Arc", 'folder');
+    frodoThread.isThread = true;
+    frodoThread.threadColor = '#3b82f6';
+    frodoThread.color = '#3b82f6';
+    objects.add(frodoThread);
 
     // Make threads visible
     timelineEditor.showThread(ringThread.id);
@@ -380,6 +405,7 @@
     // Rendered chapters appear as cards in the flow
     timeline.addCreationV2(ch1.id);
     timeline.addCreationV2(ch2.id);
+    timeline.addCreationV2(ch2b.id); // Stacked with ch2 (same timelineSlot)
     timeline.addCreationV2(ch3.id);
 
     // Scene appears in the flow (between chapters)
@@ -413,6 +439,15 @@
       ch1.id,
       'Ring passes to Frodo',
       { owner: { from: 'Bilbo', to: 'Frodo' } },
+      [ringThread.id]
+    );
+
+    // Standalone mutation between chapters (off-screen event)
+    timeline.addMutationBetween(
+      gandalf.id,
+      0, // after first card
+      'Gandalf researches the Ring',
+      { knowledge: { from: 'suspicious', to: 'certain' } },
       [ringThread.id]
     );
   }

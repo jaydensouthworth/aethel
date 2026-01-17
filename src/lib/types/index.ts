@@ -114,12 +114,19 @@ export interface AethelObject {
   // Book output
   rendered: boolean; // Include in book output?
 
+  // Timeline positioning
+  timelineSlot?: number; // Cards with same slot number are stacked (simultaneous events)
+
   // Content
   content: JSONContent | null; // TipTap JSON document
 
   // Metadata
   aliases: string[];
   attributes: Attribute[];
+
+  // Thread functionality (any object can be used as a narrative thread)
+  isThread?: boolean; // Can be used as a narrative thread
+  threadColor?: string; // Color when displayed as thread lane (defaults to object color)
 
   // Timestamps
   createdAt: string; // ISO date
@@ -129,25 +136,6 @@ export interface AethelObject {
 // ============================================================================
 // Timeline
 // ============================================================================
-
-/**
- * Thread - Tracks narrative arcs across the timeline (plot threads, character arcs, etc.)
- * Generic primitive: books use "plot threads", papers might use "argument threads"
- */
-export interface Thread {
-  id: string;
-  name: string;
-  color: string;
-  description?: string;
-  icon?: string;
-  // Timeline visibility
-  showOnTimeline: boolean;
-  showConnectingLines: boolean;
-  // Ordering
-  sortOrder?: number;
-  createdAt: string;
-  updatedAt: string;
-}
 
 /**
  * Milestone - Section groupings for timeline organization (acts, parts, sections)
@@ -278,8 +266,6 @@ export interface AethelProject {
   timeline: {
     current: Timeline;
     placements: TimelinePlacement[];
-    // v2: Threads for tracking narrative arcs
-    threads?: Thread[];
     // v2: Milestones for section groupings
     milestones?: Milestone[];
     // v2: Cursor indexes into rendered objects (not absolute position)
@@ -386,33 +372,6 @@ export function createPlacement(
     // Legacy fields (for migration compatibility)
     track: options?.track,
     position: options?.position,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/**
- * Create a new thread
- */
-export function createThread(
-  name: string,
-  color: string,
-  options?: {
-    description?: string;
-    icon?: string;
-    showOnTimeline?: boolean;
-    showConnectingLines?: boolean;
-  }
-): Thread {
-  const now = new Date().toISOString();
-  return {
-    id: createObjectId(),
-    name,
-    color,
-    description: options?.description,
-    icon: options?.icon,
-    showOnTimeline: options?.showOnTimeline ?? true,
-    showConnectingLines: options?.showConnectingLines ?? true,
     createdAt: now,
     updatedAt: now,
   };

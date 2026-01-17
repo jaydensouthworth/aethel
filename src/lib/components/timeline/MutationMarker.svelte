@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { TimelinePlacement } from '$lib/types';
-  import { objects, timelineEditor, threads } from '$lib/stores';
+  import { objects, timelineEditor } from '$lib/stores';
 
   interface Props {
     placement: TimelinePlacement;
@@ -18,13 +18,13 @@
   // Selection state
   const isSelected = $derived(timelineEditor.selectedMutationIds.has(placement.id));
 
-  // Thread colors
+  // Thread colors (threads are now objects with isThread=true)
   const threadColors = $derived.by(() => {
     const colors: string[] = [];
     for (const threadId of placement.threadIds ?? []) {
-      const thread = threads.get(threadId);
-      if (thread && timelineEditor.isThreadVisible(threadId)) {
-        colors.push(thread.color);
+      const threadObj = objects.get(threadId);
+      if (threadObj?.isThread && timelineEditor.isThreadVisible(threadId)) {
+        colors.push(objects.getEffectiveThreadColor(threadId));
       }
     }
     return colors;

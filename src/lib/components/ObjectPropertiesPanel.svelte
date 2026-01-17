@@ -133,6 +133,20 @@
       objects.update(selectedObject.id, { icon });
     }
   }
+
+  // Toggle thread
+  function handleToggleThread() {
+    if (selectedObject) {
+      objects.toggleThread(selectedObject.id);
+    }
+  }
+
+  // Handle thread color change
+  function handleThreadColorChange(color: string | undefined) {
+    if (selectedObject && color) {
+      objects.setThreadColor(selectedObject.id, color);
+    }
+  }
 </script>
 
 <div class="properties-panel" class:collapsed={ui.propertiesPanelCollapsed}>
@@ -205,6 +219,27 @@
             />
             Rendered in book
           </label>
+        </section>
+
+        <section class="section">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              checked={selectedObject.isThread ?? false}
+              onchange={handleToggleThread}
+            />
+            Use as narrative thread
+          </label>
+          {#if selectedObject.isThread}
+            <div class="thread-color-row">
+              <span class="thread-color-label">Thread color:</span>
+              <ColorPicker
+                value={selectedObject.threadColor}
+                inheritedColor={effectiveColor}
+                onSelect={handleThreadColorChange}
+              />
+            </div>
+          {/if}
         </section>
 
         <section class="section">
@@ -489,6 +524,19 @@
   .checkbox-label input {
     width: 16px;
     height: 16px;
+  }
+
+  .thread-color-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-top: var(--space-sm);
+    padding-left: calc(16px + var(--space-sm));
+  }
+
+  .thread-color-label {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
   }
 
   .aliases-list {

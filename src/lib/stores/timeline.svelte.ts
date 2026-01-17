@@ -11,7 +11,6 @@ import type {
   Timeline,
   TimelineMarker,
   TimelinePlacement,
-  TimelineTrack,
   MutationDisplay,
 } from '$lib/types';
 import { createPlacement } from '$lib/types';
@@ -24,8 +23,6 @@ import { objects } from './objects.svelte';
 export interface ComputedObjectState {
   objectId: string;
   cursorIndex: number;
-  /** @deprecated Use cursorIndex */
-  cursorPosition?: number;
   mutations: TimelinePlacement[]; // Mutations applied (index <= cursor)
   computedAttributes: Record<string, unknown>;
   futureMutations: TimelinePlacement[]; // Mutations not yet applied
@@ -67,18 +64,12 @@ class TimelineStore {
     markers: [],
   });
 
-  /** @deprecated Use single-track model instead */
-  tracks = $state<TimelineTrack[]>([{ id: 0, locked: false }]);
-
   allPlacements = $state<TimelinePlacement[]>([]);
 
   panelHeight = $state<number>(180);
 
   // v2: Cursor now indexes into rendered objects
   cursorIndex = $state<number>(0);
-
-  /** @deprecated Use cursorIndex instead */
-  cursorPosition = $state<number>(0);
 
   // ============================================================================
   // v2 Single-Track Derived State
@@ -180,64 +171,8 @@ class TimelineStore {
    */
   cardCount = $derived(this.renderedObjects.length);
 
-  // ============================================================================
-  // Legacy Derived State (kept for backwards compatibility)
-  // ============================================================================
-
-  /** @deprecated Use cards instead */
-  byTrack = $derived.by(() => {
-    const byTrack = new Map<number, TimelinePlacement[]>();
-
-    for (const p of this.allPlacements) {
-      const track = p.track ?? 0;
-      const existing = byTrack.get(track) ?? [];
-      existing.push(p);
-      byTrack.set(track, existing);
-    }
-
-    for (const [track, trackPlacements] of byTrack) {
-      byTrack.set(track, trackPlacements.sort((a, b) => (a.position ?? 0) - (b.position ?? 0)));
-    }
-
-    return byTrack;
-  });
-
-  /** @deprecated */
-  trackCount = $derived(this.tracks.length);
-
-  /** @deprecated */
-  bounds = $derived.by(() => {
-    if (this.allPlacements.length === 0) {
-      return { min: 0, max: 10 };
-    }
-
-    const positions: number[] = [];
-    for (const p of this.allPlacements) {
-      if (p.position !== undefined) {
-        positions.push(p.position);
-      }
-      if (p.endPosition !== undefined) {
-        positions.push(p.endPosition);
-      }
-    }
-
-    if (positions.length === 0) {
-      return { min: 0, max: this.cardCount };
-    }
-
-    return {
-      min: Math.min(...positions),
-      max: Math.max(...positions),
-    };
-  });
-
-  // Markers from current timeline
+  // Legacy derived (kept for marker support)
   markers = $derived(this.current.markers);
-
-  /** @deprecated */
-  get allTracks(): TimelineTrack[] {
-    return this.tracks;
-  }
 
   get minPanelHeight(): number {
     return MIN_PANEL_HEIGHT;
@@ -256,21 +191,6 @@ class TimelineStore {
 
   _clampPanelHeight(height: number): number {
     return Math.max(MIN_PANEL_HEIGHT, Math.min(MAX_PANEL_HEIGHT, height));
-  }
-
-  /** @deprecated */
-  _ensureTracksForPlacements(): void {
-    if (this.allPlacements.length > 0) {
-      const trackNumbers = this.allPlacements
-        .map((p) => p.track)
-        .filter((t): t is number => t !== undefined);
-      if (trackNumbers.length > 0) {
-        const maxTrack = Math.max(...trackNumbers);
-        while (this.tracks.length <= maxTrack) {
-          this.tracks.push({ id: this.tracks.length, locked: false });
-        }
-      }
-    }
   }
 
   /**
@@ -293,7 +213,6 @@ class TimelineStore {
 
   addPlacement(placement: TimelinePlacement): TimelinePlacement {
     this.allPlacements.push(placement);
-    this._ensureTracksForPlacements();
     return placement;
   }
 
@@ -321,6 +240,14 @@ class TimelineStore {
 
   getPlacementsForObject(objectId: string): TimelinePlacement[] {
     return this.allPlacements.filter((p) => p.objectId === objectId);
+  }
+
+  hasPlacement(objectId: string): boolean {
+    return this.allPlacements.some((p) => p.objectId === objectId);
+  }
+
+  removeAllForObject(objectId: string): void {
+    this.allPlacements = this.allPlacements.filter((p) => p.objectId !== objectId);
   }
 
   // ============================================================================
@@ -400,111 +327,6 @@ class TimelineStore {
       const idx = p.afterRenderedIndex ?? -1;
       return idx >= startIndex && idx < endIndex;
     });
-  }
-
-  // ============================================================================
-  // Legacy Convenience Methods (kept for backwards compatibility)
-  // ============================================================================
-
-  /** @deprecated Use addCreationV2 instead */
-  addCreation(
-    objectId: string,
-    position: number,
-    track: number = 0,
-    endPosition?: number
-  ): TimelinePlacement {
-    const placement = createPlacement(objectId, 'creation', {
-      position,
-      track,
-    });
-    if (endPosition !== undefined) {
-      placement.endPosition = endPosition;
-    }
-    return this.addPlacement(placement);
-  }
-
-  /** @deprecated Use addMutationBetween or addMutationBelow instead */
-  addMutation(
-    objectId: string,
-    position: number,
-    label: string,
-    changes: Record<string, { from: unknown; to: unknown }>,
-    track: number = 0
-  ): TimelinePlacement {
-    const placement = createPlacement(objectId, 'mutation', {
-      position,
-      track,
-      mutation: { label, changes },
-    });
-    return this.addPlacement(placement);
-  }
-
-  hasPlacement(objectId: string): boolean {
-    return this.allPlacements.some((p) => p.objectId === objectId);
-  }
-
-  removeAllForObject(objectId: string): void {
-    this.allPlacements = this.allPlacements.filter((p) => p.objectId !== objectId);
-  }
-
-  // ============================================================================
-  // Track Operations
-  // ============================================================================
-
-  getTrack(index: number): TimelineTrack | undefined {
-    return this.tracks[index];
-  }
-
-  updateTrack(index: number, updates: Partial<Omit<TimelineTrack, 'id'>>): void {
-    if (index >= 0 && index < this.tracks.length) {
-      this.tracks[index] = { ...this.tracks[index], ...updates };
-    }
-  }
-
-  insertTrack(index: number, config: Partial<Omit<TimelineTrack, 'id'>> = {}): void {
-    const newTrack: TimelineTrack = {
-      id: this.tracks.length,
-      locked: false,
-      ...config,
-    };
-
-    // Insert at index
-    this.tracks.splice(index, 0, newTrack);
-
-    // Reindex track IDs
-    this.tracks.forEach((t, i) => { t.id = i; });
-
-    // Shift placements
-    for (const p of this.allPlacements) {
-      if (p.track >= index) {
-        // Modifying placement in place since it's an object in the array
-        // However, to trigger fine-grained updates on the placement itself if it were a state object, we'd assign.
-        // Here `p` is a plain object inside the `$state` array. Mutating it works if it's a proxy.
-        // `$state` array elements are proxies.
-        p.track = p.track + 1;
-      }
-    }
-  }
-
-  removeTrack(index: number): void {
-    if (this.tracks.length <= 1) return;
-    if (index < 0 || index >= this.tracks.length) return;
-
-    // Remove placements on this track
-    this.allPlacements = this.allPlacements.filter((p) => p.track !== index);
-
-    // Shift placements on tracks > index
-    for (const p of this.allPlacements) {
-      if (p.track > index) {
-        p.track = p.track - 1;
-      }
-    }
-
-    // Remove the track
-    this.tracks.splice(index, 1);
-    
-    // Reindex
-    this.tracks.forEach((t, i) => { t.id = i; });
   }
 
   // ============================================================================
@@ -590,24 +412,6 @@ class TimelineStore {
     this.cursorIndex = Math.max(0, this.cardCount - 1);
   }
 
-  /** @deprecated Use setCursorIndex instead */
-  setCursorPosition(pos: number): void {
-    this.cursorPosition = pos;
-  }
-
-  /** @deprecated Use moveCursorToObject instead */
-  moveCursorToPlacement(placementId: string): void {
-    const placement = this.getPlacement(placementId);
-    if (placement) {
-      this.cursorPosition = placement.position ?? 0;
-      // Also try to set cursorIndex for v2 compatibility
-      const index = this.getCardIndex(placement.objectId);
-      if (index >= 0) {
-        this.cursorIndex = index;
-      }
-    }
-  }
-
   /**
    * Get the computed state of an object at the current cursor position
    * In v2, this considers mutations up to and including the current card index
@@ -630,17 +434,12 @@ class TimelineStore {
           return attachedIndex >= 0 && attachedIndex <= currentIndex;
         }
 
-        // Legacy: fall back to position-based
-        if (p.position !== undefined) {
-          return p.position <= this.cursorPosition;
-        }
-
         return false;
       })
       .sort((a, b) => {
-        // Sort by afterRenderedIndex or position
-        const aIdx = a.afterRenderedIndex ?? a.position ?? 0;
-        const bIdx = b.afterRenderedIndex ?? b.position ?? 0;
+        // Sort by afterRenderedIndex
+        const aIdx = a.afterRenderedIndex ?? 0;
+        const bIdx = b.afterRenderedIndex ?? 0;
         return aIdx - bIdx;
       });
 
@@ -665,22 +464,17 @@ class TimelineStore {
           return attachedIndex > currentIndex;
         }
 
-        if (p.position !== undefined) {
-          return p.position > this.cursorPosition;
-        }
-
         return false;
       })
       .sort((a, b) => {
-        const aIdx = a.afterRenderedIndex ?? a.position ?? 0;
-        const bIdx = b.afterRenderedIndex ?? b.position ?? 0;
+        const aIdx = a.afterRenderedIndex ?? 0;
+        const bIdx = b.afterRenderedIndex ?? 0;
         return aIdx - bIdx;
       });
 
     return {
       objectId,
       cursorIndex: currentIndex,
-      cursorPosition: this.cursorPosition,
       mutations: relevantMutations,
       computedAttributes,
       futureMutations,
@@ -772,26 +566,6 @@ class TimelineStore {
     this.panelHeight = this._clampPanelHeight(newPanelHeight);
   }
 
-  /** @deprecated Use loadV2 for new code */
-  load(
-    timelineData: Timeline,
-    newPlacements: TimelinePlacement[],
-    newCursorPosition: number = 0,
-    newPanelHeight: number = 180,
-    newTracks?: TimelineTrack[]
-  ): void {
-    this.current = timelineData;
-    this.allPlacements = newPlacements;
-    this.cursorPosition = newCursorPosition;
-    this.cursorIndex = 0; // Will need migration to set properly
-    this.panelHeight = this._clampPanelHeight(newPanelHeight);
-
-    if (newTracks && newTracks.length > 0) {
-      this.tracks = newTracks;
-    }
-    this._ensureTracksForPlacements();
-  }
-
   clear(): void {
     this.current = {
       id: 'main',
@@ -800,9 +574,7 @@ class TimelineStore {
     };
     this.allPlacements = [];
     this.cursorIndex = 0;
-    this.cursorPosition = 0;
     this.panelHeight = 180;
-    this.tracks = [{ id: 0, locked: false }];
   }
 }
 

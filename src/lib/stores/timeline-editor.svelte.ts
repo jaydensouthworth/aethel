@@ -181,16 +181,14 @@ class TimelineEditorStore {
       .filter((p) => p !== undefined);
   }
 
-  /** @deprecated */
+  /** @deprecated - v2 uses index-based cards */
   get visibleRange() {
-    const currentZoom = this.zoom;
-    const currentScrollOffset = this.scrollOffset;
-    const { min, max } = timeline.bounds;
-    const totalRange = max - min || 10;
-    const visibleWidth = totalRange / currentZoom;
+    // In v2, use card count as the range
+    const totalRange = timeline.cardCount || 10;
+    const visibleWidth = totalRange / this.zoom;
     return {
-      min: min + currentScrollOffset,
-      max: min + currentScrollOffset + visibleWidth,
+      min: this.scrollOffset,
+      max: this.scrollOffset + visibleWidth,
     };
   }
 
@@ -578,11 +576,10 @@ class TimelineEditorStore {
     const currentScrollOffset = this.scrollOffset;
     const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
 
-    const bounds = timeline.bounds;
-    const { min, max } = bounds;
-    const totalRange = max - min || 10;
+    // In v2, use card count as the range
+    const totalRange = timeline.cardCount || 10;
 
-    const relativePos = centerPosition - min - currentScrollOffset;
+    const relativePos = centerPosition - currentScrollOffset;
     const oldWidth = totalRange / currentZoom;
     const newWidth = totalRange / clampedZoom;
     const positionRatio = relativePos / oldWidth;
@@ -626,7 +623,9 @@ class TimelineEditorStore {
     // Other placement edges
     for (const p of timeline.allPlacements) {
       if (currentSelectedIds.has(p.id)) continue;
-      snapPoints.push(p.position);
+      if (p.position !== undefined) {
+        snapPoints.push(p.position);
+      }
       if (p.endPosition !== undefined) {
         snapPoints.push(p.endPosition);
       }
@@ -638,8 +637,8 @@ class TimelineEditorStore {
       snapPoints.push(m.position);
     }
 
-    // Cursor
-    snapPoints.push(timeline.cursorPosition);
+    // Cursor index (v2 model uses index-based cursor)
+    // In v2, snapping to cursor doesn't apply since we use card indices
 
     // Find closest snap point
     let closest = position;
@@ -699,7 +698,7 @@ class TimelineEditorStore {
   isPlacementLocked(id: string): boolean {
     if (this.lockedPlacements.has(id)) return true;
     const placement = timeline.getPlacement(id);
-    if (placement && this.lockedTracks.has(placement.track)) return true;
+    if (placement && placement.track !== undefined && this.lockedTracks.has(placement.track)) return true;
     return false;
   }
 

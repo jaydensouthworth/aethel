@@ -152,13 +152,16 @@ export function createEditorContext(): EditorContextValue {
 
     // Timeline integration
     getCursorPosition() {
-      return timeline.cursorPosition;
+      // v2: Return cursor index (card-based)
+      return timeline.cursorIndex;
     },
 
     addMutation(objectId, label, changes) {
-      const position = timeline.cursorPosition;
-      // Find an appropriate track (use track 2 for mutations by default)
-      timeline.addMutation(objectId, position, label, changes, 2);
+      // v2: Add mutation below the current card
+      const currentCard = timeline.currentCard;
+      if (currentCard) {
+        timeline.addMutationBelow(objectId, currentCard.id, label, changes);
+      }
     },
 
     getObjectMutations(objectId: string) {

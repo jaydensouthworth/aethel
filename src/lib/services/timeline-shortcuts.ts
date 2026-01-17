@@ -1,5 +1,5 @@
 /**
- * Timeline Keyboard Shortcuts
+ * Timeline Keyboard Shortcuts (v2 - Single-track card model)
  * Handles keyboard shortcuts for timeline editing operations.
  */
 
@@ -16,35 +16,6 @@ interface ShortcutConfig {
 }
 
 const shortcuts: ShortcutConfig[] = [
-	// Tools
-	{
-		key: 'v',
-		action: () => timelineEditor.setTool('select'),
-		description: 'Selection tool',
-	},
-	{
-		key: 'b',
-		action: () => timelineEditor.setTool('razor'),
-		description: 'Razor tool',
-	},
-	{
-		key: 's',
-		action: () => timelineEditor.setTool('slip'),
-		description: 'Slip tool',
-	},
-	{
-		key: 'd',
-		action: () => timelineEditor.setTool('slide'),
-		description: 'Slide tool',
-	},
-
-	// Movement mode
-	{
-		key: 'm',
-		action: () => timelineEditor.toggleMovementMode(),
-		description: 'Toggle movement mode',
-	},
-
 	// Snap
 	{
 		key: 'n',
@@ -61,57 +32,16 @@ const shortcuts: ShortcutConfig[] = [
 	},
 	{
 		key: 'Escape',
-		action: () => timelineEditor.clearSelection(),
+		action: () => timelineEditor.clearAllSelection(),
 		description: 'Clear selection',
 	},
 
-	// Delete
-	{
-		key: 'Delete',
-		action: () => ops.deleteSelectedPlacements(),
-		description: 'Delete selected',
-	},
-	{
-		key: 'Backspace',
-		action: () => ops.deleteSelectedPlacements(),
-		description: 'Delete selected',
-	},
-
-	// Duplicate
-	{
-		key: 'd',
-		ctrl: true,
-		action: () => ops.duplicateSelectedPlacements(),
-		description: 'Duplicate selected',
-	},
-
-	// Copy/Paste
+	// Copy/Paste (v2 - just clipboard for now)
 	{
 		key: 'c',
 		ctrl: true,
 		action: () => timelineEditor.copySelected(),
 		description: 'Copy selected',
-	},
-	{
-		key: 'v',
-		ctrl: true,
-		action: () => ops.pasteAtCursor(),
-		description: 'Paste at cursor',
-	},
-
-	// Grouping
-	{
-		key: 'g',
-		ctrl: true,
-		action: () => timelineEditor.groupSelected(),
-		description: 'Group selected',
-	},
-	{
-		key: 'g',
-		ctrl: true,
-		shift: true,
-		action: () => timelineEditor.ungroupSelected(),
-		description: 'Ungroup selected',
 	},
 
 	// Lock
@@ -169,38 +99,40 @@ const shortcuts: ShortcutConfig[] = [
 		description: 'Reset zoom',
 	},
 
-	// Nudge
+	// v2 Navigation (card-based)
 	{
 		key: 'ArrowLeft',
-		action: () => ops.nudgeSelectedPlacements('left'),
-		description: 'Nudge left',
+		action: () => {
+			timelineEditor.selectPrevCard();
+			timeline.cursorPrev();
+		},
+		description: 'Previous card',
 	},
 	{
 		key: 'ArrowRight',
-		action: () => ops.nudgeSelectedPlacements('right'),
-		description: 'Nudge right',
+		action: () => {
+			timelineEditor.selectNextCard();
+			timeline.cursorNext();
+		},
+		description: 'Next card',
 	},
-	{
-		key: 'ArrowUp',
-		action: () => ops.moveSelectedPlacements(0, -1),
-		description: 'Move to track above',
-	},
-	{
-		key: 'ArrowDown',
-		action: () => ops.moveSelectedPlacements(0, 1),
-		description: 'Move to track below',
-	},
-
-	// Navigation
 	{
 		key: 'Home',
-		action: () => timeline.setCursorPosition(timeline.bounds.min),
-		description: 'Jump to start',
+		action: () => {
+			timeline.cursorFirst();
+			const card = timeline.getCardAt(0);
+			if (card) timelineEditor.selectCard(card.object.id);
+		},
+		description: 'Jump to first card',
 	},
 	{
 		key: 'End',
-		action: () => timeline.setCursorPosition(timeline.bounds.max),
-		description: 'Jump to end',
+		action: () => {
+			timeline.cursorLast();
+			const card = timeline.getCardAt(timeline.cardCount - 1);
+			if (card) timelineEditor.selectCard(card.object.id);
+		},
+		description: 'Jump to last card',
 	},
 ];
 

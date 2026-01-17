@@ -88,10 +88,14 @@ class ProjectStore {
     const { objects } = await import('./objects.svelte');
     const { timeline } = await import('./timeline.svelte');
     const { ui } = await import('./ui.svelte');
+    const { milestones } = await import('./milestones.svelte');
+    const { timelineEditor } = await import('./timeline-editor.svelte');
 
     objects.clear();
     timeline.clear();
     ui.clear();
+    milestones.clear();
+    timelineEditor.clear();
 
     this.currentProjectId = null;
     this.isDirty = false;

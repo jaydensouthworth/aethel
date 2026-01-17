@@ -11,6 +11,5 @@ export { project } from './project.svelte';
 export { timelineEditor } from './timeline-editor.svelte';
 export { timelineHistory } from './timeline-history.svelte';
 
-// v2: Threads and Milestones
-export { threads } from './threads.svelte';
+// v2: Milestones (threads are now objects with isThread=true)
 export { milestones } from './milestones.svelte';

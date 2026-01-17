@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TimelineCard as TCard } from '$lib/stores/timeline.svelte';
   import { getObjectType } from '$lib/types';
-  import { objects, timelineEditor, threads } from '$lib/stores';
+  import { objects, timelineEditor } from '$lib/stores';
 
   interface Props {
     card: TCard;
@@ -21,7 +21,7 @@
   // Selection state
   const isSelected = $derived(timelineEditor.selectedCardId === obj.id);
 
-  // Thread colors for this card
+  // Thread colors for this card (threads are now objects with isThread=true)
   const cardThreads = $derived.by(() => {
     const result: Array<{ id: string; color: string; name: string }> = [];
     const seenIds = new Set<string>();
@@ -30,9 +30,13 @@
       for (const threadId of mutation.threadIds ?? []) {
         if (!seenIds.has(threadId)) {
           seenIds.add(threadId);
-          const thread = threads.get(threadId);
-          if (thread && timelineEditor.isThreadVisible(threadId)) {
-            result.push({ id: thread.id, color: thread.color, name: thread.name });
+          const threadObj = objects.get(threadId);
+          if (threadObj?.isThread && timelineEditor.isThreadVisible(threadId)) {
+            result.push({
+              id: threadObj.id,
+              color: objects.getEffectiveThreadColor(threadObj.id),
+              name: threadObj.name
+            });
           }
         }
       }

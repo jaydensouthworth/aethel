@@ -15,7 +15,6 @@ export async function serializeProject(): Promise<AethelProject> {
   // Dynamic imports to avoid circular dependency
   const { objects } = await import('$lib/stores/objects.svelte');
   const { timeline } = await import('$lib/stores/timeline.svelte');
-  const { threads } = await import('$lib/stores/threads.svelte');
   const { milestones } = await import('$lib/stores/milestones.svelte');
   const { ui } = await import('$lib/stores/ui.svelte');
   const { timelineEditor } = await import('$lib/stores/timeline-editor.svelte');
@@ -24,22 +23,18 @@ export async function serializeProject(): Promise<AethelProject> {
     version: PROJECT_VERSION,
     savedAt: new Date().toISOString(),
 
-    // Core data
+    // Core data (includes thread objects with isThread=true)
     objects: objects.all,
 
     // Timeline data (v2 format)
     timeline: {
       current: timeline.current,
       placements: timeline.allPlacements,
-      // v2: threads and milestones
-      threads: threads.all,
+      // v2: milestones (threads are now stored as objects with isThread=true)
       milestones: milestones.all,
       // v2: cursor index (not position)
       cursorIndex: timeline.cursorIndex,
       panelHeight: timeline.panelHeight,
-      // Legacy (kept for backwards compatibility)
-      cursorPosition: timeline.cursorPosition,
-      tracks: timeline.allTracks,
     },
 
     // UI state - convert Set to Array for JSON serialization
@@ -62,7 +57,6 @@ export async function deserializeProject(project: AethelProject): Promise<void> 
   // Dynamic imports to avoid circular dependency
   const { objects } = await import('$lib/stores/objects.svelte');
   const { timeline } = await import('$lib/stores/timeline.svelte');
-  const { threads } = await import('$lib/stores/threads.svelte');
   const { milestones } = await import('$lib/stores/milestones.svelte');
   const { ui } = await import('$lib/stores/ui.svelte');
   const { timelineEditor } = await import('$lib/stores/timeline-editor.svelte');
@@ -70,18 +64,14 @@ export async function deserializeProject(project: AethelProject): Promise<void> 
   // Clear existing state
   objects.clear();
   timeline.clear();
-  threads.clear();
   milestones.clear();
   ui.clear();
   timelineEditor.clear();
 
-  // Restore objects
+  // Restore objects (includes thread objects with isThread=true)
   objects.load(project.objects);
 
-  // Restore threads and milestones
-  if (project.timeline.threads) {
-    threads.load(project.timeline.threads);
-  }
+  // Restore milestones
   if (project.timeline.milestones) {
     milestones.load(project.timeline.milestones);
   }

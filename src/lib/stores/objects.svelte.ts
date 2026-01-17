@@ -20,6 +20,9 @@ class ObjectsStore {
   // All objects as array
   all = $derived(Object.values(this._objectsById));
 
+  // Thread objects (objects that can be used as narrative threads)
+  threadObjects = $derived(this.all.filter((o) => o.isThread));
+
   // Lookup by name/alias
   byName = $derived.by(() => {
     const map = new Map<string, AethelObject>();
@@ -137,6 +140,31 @@ class ObjectsStore {
     const obj = createObject(name, typeId, parentId);
     this.add(obj);
     return obj;
+  }
+
+  // ============================================================================
+  // Thread Operations
+  // ============================================================================
+
+  toggleThread(objectId: string, isThread?: boolean): void {
+    const obj = this._objectsById[objectId];
+    if (!obj) return;
+    const newIsThread = isThread ?? !obj.isThread;
+    this.update(objectId, {
+      isThread: newIsThread,
+      // Set default thread color if enabling and no color set
+      threadColor: newIsThread && !obj.threadColor ? obj.color ?? getObjectType(obj.typeId).color : obj.threadColor,
+    });
+  }
+
+  setThreadColor(objectId: string, color: string): void {
+    this.update(objectId, { threadColor: color });
+  }
+
+  getEffectiveThreadColor(objectId: string): string {
+    const obj = this._objectsById[objectId];
+    if (!obj) return '#78716c';
+    return obj.threadColor ?? obj.color ?? getObjectType(obj.typeId).color;
   }
 
   // ============================================================================
