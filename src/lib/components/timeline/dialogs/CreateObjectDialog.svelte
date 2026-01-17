@@ -48,13 +48,14 @@
       const result = ops.createObjectWithPlacement(
         name.trim(),
         selectedTypeId,
-        position,
-        track,
-        {
-          parentId,
-          rendered: markAsRendered,
-        }
+        position, // ignored in v3 timeslot model
+        track, // ignored in v3 timeslot model
+        parentId
       );
+      // Apply rendered state separately
+      if (markAsRendered !== result.object.rendered) {
+        objects.update(result.object.id, { rendered: markAsRendered });
+      }
       objectId = result.object.id;
     } else {
       // Create object without timeline placement

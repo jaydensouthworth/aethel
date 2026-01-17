@@ -31,10 +31,8 @@
   const isFolder = $derived(obj?.typeId === 'folder');
   const placements = $derived(obj ? timeline.getPlacementsForObject(obj.id) : []);
   const hasPlacement = $derived(placements.length > 0);
-  const cursorPosition = $derived(timeline.cursorPosition);
 
-  // Track submenu state
-  let showAddToTrackSubmenu = $state(false);
+  // Delete confirmation state
   let showDeleteConfirm = $state(false);
 
   // Infer the default type for new items based on folder's color
@@ -63,7 +61,6 @@
   });
 
   function handleClose() {
-    showAddToTrackSubmenu = false;
     showDeleteConfirm = false;
     onClose();
   }
@@ -103,18 +100,20 @@
     handleClose();
   }
 
-  function handleAddToTimeline(track: number = 0) {
+  function handleAddToTimeline() {
     if (!obj) return;
-    ops.addObjectToTimeline(obj.id, cursorPosition, track);
-    showAddToTrackSubmenu = false;
+    ops.addObjectAsCard(obj.id);
     handleClose();
   }
 
   function handleJumpToPlacement() {
     if (!obj || placements.length === 0) return;
-    // Jump to first placement
-    const firstPlacement = placements.sort((a, b) => a.position - b.position)[0];
-    timeline.setCursorPosition(firstPlacement.position);
+    // Jump to first placement by finding its timeslot index
+    const firstPlacement = placements[0];
+    const timeslotIndex = timeline.getTimeslotIndex(firstPlacement.timeslotId);
+    if (timeslotIndex >= 0) {
+      timeline.setCursorIndex(timeslotIndex);
+    }
     timelineEditor.clearSelection();
     timelineEditor.select(firstPlacement.id);
     handleClose();
@@ -269,33 +268,10 @@
           Remove from timeline
         </ContextMenuItem>
       {:else if !isFolder}
-        <!-- Add to track submenu -->
-        <div class="submenu-container">
-          <button
-            class="submenu-trigger"
-            onclick={() => showAddToTrackSubmenu = !showAddToTrackSubmenu}
-          >
-            <span class="item-icon">+</span>
-            <span class="item-label">Add to timeline</span>
-            <span class="submenu-arrow">{showAddToTrackSubmenu ? '▾' : '▸'}</span>
-          </button>
-
-          {#if showAddToTrackSubmenu}
-            <div class="submenu">
-              {#each timeline.allTracks as track, i}
-                <button
-                  class="submenu-item"
-                  onclick={() => handleAddToTimeline(i)}
-                >
-                  Track {i + 1}
-                  {#if track.name}
-                    <span class="track-name">({track.name})</span>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
+        <ContextMenuItem onclick={handleAddToTimeline}>
+          {#snippet icon()}+{/snippet}
+          Add to timeline
+        </ContextMenuItem>
       {/if}
 
       {#if !isFolder}

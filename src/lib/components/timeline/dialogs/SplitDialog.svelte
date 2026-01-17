@@ -47,10 +47,12 @@
   const obj = $derived(placement ? objects.get(placement.objectId) : null);
   const objectType = $derived(obj ? getObjectType(obj.typeId) : null);
   const isContentType = $derived(objectType?.isContentType ?? false);
-  const hasRange = $derived(placement?.endPosition !== undefined);
-  const minPosition = $derived(placement?.position ?? 0);
-  const maxPosition = $derived(placement?.endPosition ?? placement?.position ?? 0);
-  const rangeLength = $derived(maxPosition - minPosition);
+  // Note: In v3 timeslot model, placements don't have position ranges
+  // This dialog is essentially deprecated - splitting is not applicable
+  const hasRange = $derived(false); // Placements no longer have ranges in v3
+  const minPosition = $derived(0);
+  const maxPosition = $derived(0);
+  const rangeLength = $derived(0);
 
   // Initialize split position when opened
   $effect(() => {
@@ -127,7 +129,7 @@
     };
   }
 
-  $effect(async () => {
+  $effect(() => {
     if (!open || !obj || !isContentType) {
       if (editor) {
         editor.destroy();
@@ -136,58 +138,61 @@
       return;
     }
 
-    await tick();
-    if (!editorElement) return;
+    // Use microtask to wait for DOM
+    queueMicrotask(async () => {
+      await tick();
+      if (!editorElement) return;
 
-    if (editor) {
-      editor.destroy();
-    }
+      if (editor) {
+        editor.destroy();
+      }
 
-    editor = new Editor({
-      element: editorElement,
-      extensions: [
-        StarterKit.configure({
-          heading: { levels: [1, 2, 3] },
-        }),
-        ObjectRef.configure({
-          resolveObject: (text: string) => {
-            const match = objects.getByName(text);
-            if (!match) return null;
-            return {
-              id: match.id,
-              name: match.name,
-              color: objects.getEffectiveColor(match.id),
-            };
+      editor = new Editor({
+        element: editorElement,
+        extensions: [
+          StarterKit.configure({
+            heading: { levels: [1, 2, 3] },
+          }),
+          ObjectRef.configure({
+            resolveObject: (text: string) => {
+              const match = objects.getByName(text);
+              if (!match) return null;
+              return {
+                id: match.id,
+                name: match.name,
+                color: objects.getEffectiveColor(match.id),
+              };
+            },
+          }),
+        ],
+        content: obj.content ?? { type: 'doc', content: [{ type: 'paragraph' }] },
+        editorProps: {
+          attributes: {
+            class: 'split-editor-content',
           },
-        }),
-      ],
-      content: obj.content ?? { type: 'doc', content: [{ type: 'paragraph' }] },
-      editorProps: {
-        attributes: {
-          class: 'split-editor-content',
-        },
-        handleDOMEvents: {
-          beforeinput: () => true,
-          keydown: (_view, event) => {
-            if (
-              event.key === 'Backspace' ||
-              event.key === 'Delete' ||
-              event.key === 'Enter' ||
-              event.key.length === 1
-            ) {
-              event.preventDefault();
-              return true;
-            }
-            return false;
+          handleDOMEvents: {
+            beforeinput: () => true,
+            keydown: (_view, event) => {
+              if (
+                event.key === 'Backspace' ||
+                event.key === 'Delete' ||
+                event.key === 'Enter' ||
+                event.key.length === 1
+              ) {
+                event.preventDefault();
+                return true;
+              }
+              return false;
+            },
           },
         },
-      },
-      onSelectionUpdate: ({ editor }) => {
-        splitTextPosition = editor.state.selection.from;
-      },
+        onSelectionUpdate: ({ editor: ed }) => {
+          splitTextPosition = ed.state.selection.from;
+        },
+      });
+
+      splitTextPosition = editor.state.selection.from;
     });
-
-    splitTextPosition = editor.state.selection.from;
   });
 
   onDestroy(() => {
@@ -199,14 +204,17 @@
 
   function handleSubmit(e: Event) {
     e.preventDefault();
+    // Note: In v3 timeslot model, placements don't have position ranges
+    // This dialog is deprecated - splitPlacement is not implemented
     if (!placementId || !placement || !hasRange) return;
 
     // Validate split position
     if (!canSplitTimeline) return;
 
     if (!isContentType || !editor || !obj) {
+      // splitPlacement returns { left, right } but is not implemented in v3
       const result = ops.splitPlacement(placementId, splitPosition);
-      onSplit?.(result ? [result.before.id, result.after.id] : []);
+      onSplit?.(result ? [result.left.id, result.right.id] : []);
       onClose();
       return;
     }
@@ -214,14 +222,13 @@
     const contentSplit = splitEditorContent();
     if (!contentSplit) return;
 
+    // In v3 timeslot model, create new placement in the same timeslot
     const newObj = createSplitObject(contentSplit.after);
     const newPlacement = createPlacement(
       newObj.id,
       placement.type,
-      splitPosition,
-      placement.track,
+      placement.timeslotId,
       {
-        endPosition: placement.endPosition,
         mutation: placement.mutation,
       }
     );
@@ -229,7 +236,7 @@
     const batch = timelineHistory.beginBatch(`Split "${obj.name}"`);
     batch.add(createUpdateObjectCommand(obj.id, { content: contentSplit.before }));
     batch.add(createAddObjectCommand(newObj));
-    batch.add(createUpdatePlacementCommand(placement.id, { endPosition: splitPosition }));
+    // Note: No endPosition update in v3 model
     batch.add(createAddPlacementCommand(newPlacement));
     batch.commit();
 

@@ -7,10 +7,8 @@
     open: boolean;
     /** The object to add a mutation for */
     objectId: string | null;
-    /** Position on timeline to add the mutation */
-    position?: number;
-    /** Track to place mutation on */
-    track?: number;
+    /** Timeslot ID to add the mutation at (optional, uses current cursor if not specified) */
+    timeslotId?: string;
     /** Callback when dialog closes */
     onClose: () => void;
     /** Callback when mutation is added */
@@ -20,8 +18,7 @@
   let {
     open,
     objectId,
-    position = 0,
-    track = 0,
+    timeslotId,
     onClose,
     onCreated,
   }: Props = $props();
@@ -74,13 +71,18 @@
       };
     }
 
-    const placement = ops.addMutation(
-      objectId,
-      position,
-      label.trim(),
-      changes,
-      track
-    );
+    // Use addMutationAtCurrent if no specific timeslotId, otherwise use addMutation
+    let placement: ReturnType<typeof ops.addMutation> | null;
+    if (timeslotId) {
+      placement = ops.addMutation(objectId, timeslotId, label.trim(), changes);
+    } else {
+      placement = ops.addMutationAtCurrent(objectId, label.trim(), changes);
+    }
+
+    if (!placement) {
+      // No current timeslot - can't add mutation
+      return;
+    }
 
     onCreated?.(placement.id);
     resetForm();
@@ -125,7 +127,7 @@
           {objects.getEffectiveIcon(obj.id)}
         </span>
         <span class="object-name">{obj.name}</span>
-        <span class="position-badge">@ position {position}</span>
+        <span class="position-badge">@ cursor {timeline.cursorIndex + 1}</span>
       </div>
 
       <form onsubmit={handleSubmit}>

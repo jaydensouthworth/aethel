@@ -1,10 +1,10 @@
 /**
- * Timeline Commands
+ * Timeline Commands (v3 - timeslot-based model)
  * Command classes for undo/redo support.
  * Each command encapsulates an operation that can be executed and undone.
  */
 
-import type { AethelObject, TimelinePlacement, Milestone, MutationDisplay } from '$lib/types';
+import type { AethelObject, TimelinePlacement, Milestone } from '$lib/types';
 import { objects } from '$lib/stores/objects.svelte';
 import { timeline } from '$lib/stores/timeline.svelte';
 import { milestones } from '$lib/stores/milestones.svelte';
@@ -243,7 +243,7 @@ export function createRemoveFromThreadCommand(
 }
 
 // ============================================================================
-// v2: Milestone Commands
+// v3: Milestone Commands (timeslot-based)
 // ============================================================================
 
 /**
@@ -318,74 +318,34 @@ export function createDeleteMilestoneCommand(milestoneId: string): TimelineComma
 }
 
 /**
- * Move a milestone to a new position
+ * Move a milestone to appear before a different timeslot
  */
 export function createMoveMilestoneCommand(
 	milestoneId: string,
-	newPosition: number
+	newTimeslotId: string | null
 ): TimelineCommand {
 	const milestone = milestones.get(milestoneId);
 	if (!milestone) {
 		throw new Error(`Milestone ${milestoneId} not found`);
 	}
 
-	const originalPosition = milestone.position;
+	const originalTimeslotId = milestone.timeslotId;
 
 	return {
 		id: crypto.randomUUID(),
 		type: 'move-milestone',
 		description: `Move milestone "${milestone.name}"`,
 		execute: () => {
-			milestones.move(milestoneId, newPosition);
+			milestones.moveToTimeslot(milestoneId, newTimeslotId);
 		},
 		undo: () => {
-			milestones.move(milestoneId, originalPosition);
+			milestones.moveToTimeslot(milestoneId, originalTimeslotId);
 		},
 	};
 }
 
 // ============================================================================
-// v2: Mutation Display Commands
-// ============================================================================
-
-/**
- * Change a mutation's display mode (between vs below)
- */
-export function createChangeMutationDisplayCommand(
-	placementId: string,
-	display: MutationDisplay,
-	options?: {
-		attachedToObjectId?: string;
-		position?: number;
-	}
-): TimelineCommand {
-	const placement = timeline.getPlacement(placementId);
-	if (!placement) {
-		throw new Error(`Placement ${placementId} not found`);
-	}
-
-	const originalDisplay = placement.mutationDisplay;
-	const originalAttachedTo = placement.attachedToObjectId;
-	const originalPosition = placement.position;
-
-	return {
-		id: crypto.randomUUID(),
-		type: 'change-mutation-display',
-		description: `Change mutation display to ${display}`,
-		execute: () => {
-			timeline.setMutationDisplay(placementId, display, options);
-		},
-		undo: () => {
-			timeline.setMutationDisplay(placementId, originalDisplay ?? 'between', {
-				attachedToObjectId: originalAttachedTo,
-				position: originalPosition,
-			});
-		},
-	};
-}
-
-// ============================================================================
-// v2: Card Commands
+// v3: Card Commands (timeslot-based)
 // ============================================================================
 
 /**
@@ -423,113 +383,104 @@ export function createToggleRenderedCommand(objectId: string): TimelineCommand {
 	}
 
 	const originalRendered = obj.rendered;
+	const originalTimeslotId = obj.timeslotId;
 
 	return {
 		id: crypto.randomUUID(),
 		type: 'toggle-rendered',
 		description: originalRendered ? `Remove "${obj.name}" from timeline` : `Add "${obj.name}" to timeline`,
 		execute: () => {
-			objects.update(objectId, { rendered: !originalRendered });
+			if (originalRendered) {
+				// Removing from timeline - clear timeslotId
+				objects.update(objectId, { rendered: false, timeslotId: undefined });
+			} else {
+				// Adding to timeline - will need a timeslot assigned separately
+				objects.update(objectId, { rendered: true });
+			}
 		},
 		undo: () => {
-			objects.update(objectId, { rendered: originalRendered });
+			objects.update(objectId, { rendered: originalRendered, timeslotId: originalTimeslotId });
 		},
 	};
 }
 
 // ============================================================================
-// v2: Drag and Drop Commands
+// v3: Timeslot-based Drag and Drop Commands
 // ============================================================================
 
 /**
- * Reorder a card in the timeline by changing its position.
- * Optionally clears timelineSlot to move card out of a stacked group.
+ * Reorder a card in the timeline by moving it to a different timeslot index.
  */
 export function createReorderCardCommand(
 	objectId: string,
-	newPosition: number,
-	clearTimelineSlot: boolean = false
+	newTimeslotIndex: number
 ): TimelineCommand {
 	const obj = objects.get(objectId);
 	if (!obj) {
 		throw new Error(`Object ${objectId} not found`);
 	}
 
-	const originalPosition = obj.position;
-	const originalTimelineSlot = obj.timelineSlot;
+	const originalTimeslotId = obj.timeslotId;
+	// Get or create the target timeslot
+	const targetTimeslotId = timeline.getTimeslotIdAt(newTimeslotIndex);
 
 	return {
 		id: crypto.randomUUID(),
 		type: 'reorder-card',
 		description: `Reorder "${obj.name}"`,
 		execute: () => {
-			const updates: { position: number; timelineSlot?: undefined } = { position: newPosition };
-			if (clearTimelineSlot && originalTimelineSlot !== undefined) {
-				updates.timelineSlot = undefined;
+			if (targetTimeslotId) {
+				objects.update(objectId, { timeslotId: targetTimeslotId });
 			}
-			objects.update(objectId, updates);
 		},
 		undo: () => {
-			const updates: { position?: number; timelineSlot?: number } = { position: originalPosition };
-			if (clearTimelineSlot && originalTimelineSlot !== undefined) {
-				updates.timelineSlot = originalTimelineSlot;
-			}
-			objects.update(objectId, updates);
+			objects.update(objectId, { timeslotId: originalTimeslotId });
 		},
 	};
 }
 
 /**
- * Move a mutation to a new position
+ * Move a mutation to a different timeslot
  */
 export function createMoveMutationCommand(
 	placementId: string,
-	newPos: {
-		display: MutationDisplay;
-		attachedToObjectId?: string;
-		position?: number;
-	}
+	newTimeslotId: string,
+	newAttachedToCardId?: string
 ): TimelineCommand {
 	const placement = timeline.getPlacement(placementId);
 	if (!placement) {
 		throw new Error(`Placement ${placementId} not found`);
 	}
 
-	const originalPos = {
-		display: placement.mutationDisplay ?? 'between' as MutationDisplay,
-		attachedToObjectId: placement.attachedToObjectId,
-		position: placement.position,
-	};
+	const originalTimeslotId = placement.timeslotId;
+	const originalAttachedToCardId = placement.attachedToCardId;
 
 	return {
 		id: crypto.randomUUID(),
 		type: 'move-mutation',
 		description: `Move mutation`,
 		execute: () => {
-			timeline.setMutationDisplay(placementId, newPos.display, {
-				attachedToObjectId: newPos.attachedToObjectId,
-				position: newPos.position,
+			timeline.updatePlacement(placementId, {
+				timeslotId: newTimeslotId,
+				attachedToCardId: newAttachedToCardId,
 			});
 		},
 		undo: () => {
-			timeline.setMutationDisplay(placementId, originalPos.display, {
-				attachedToObjectId: originalPos.attachedToObjectId,
-				position: originalPos.position,
+			timeline.updatePlacement(placementId, {
+				timeslotId: originalTimeslotId,
+				attachedToCardId: originalAttachedToCardId,
 			});
 		},
 	};
 }
 
 /**
- * Duplicate a mutation at a new position
+ * Duplicate a mutation at a new timeslot
  */
 export function createDuplicateMutationCommand(
 	sourcePlacementId: string,
-	newPos: {
-		display: MutationDisplay;
-		attachedToObjectId?: string;
-		position?: number;
-	}
+	newTimeslotId: string,
+	newAttachedToCardId?: string
 ): TimelineCommand {
 	const source = timeline.getPlacement(sourcePlacementId);
 	if (!source) {
@@ -543,9 +494,8 @@ export function createDuplicateMutationCommand(
 		id: crypto.randomUUID(),
 		objectId: source.objectId,
 		type: 'mutation',
-		mutationDisplay: newPos.display,
-		attachedToObjectId: newPos.attachedToObjectId,
-		position: newPos.position,
+		timeslotId: newTimeslotId,
+		attachedToCardId: newAttachedToCardId,
 		mutation: source.mutation ? { ...source.mutation } : undefined,
 		threadIds: source.threadIds ? [...source.threadIds] : undefined,
 		createdAt: new Date().toISOString(),
@@ -566,7 +516,7 @@ export function createDuplicateMutationCommand(
 }
 
 /**
- * Swap positions between two cards
+ * Swap timeslots between two cards
  */
 export function createSwapCardsCommand(
 	objectId1: string,
@@ -578,26 +528,26 @@ export function createSwapCardsCommand(
 		throw new Error(`Objects not found for swap`);
 	}
 
-	const originalPosition1 = obj1.position;
-	const originalPosition2 = obj2.position;
+	const originalTimeslotId1 = obj1.timeslotId;
+	const originalTimeslotId2 = obj2.timeslotId;
 
 	return {
 		id: crypto.randomUUID(),
 		type: 'swap-cards',
 		description: `Swap "${obj1.name}" with "${obj2.name}"`,
 		execute: () => {
-			objects.update(objectId1, { position: originalPosition2 });
-			objects.update(objectId2, { position: originalPosition1 });
+			objects.update(objectId1, { timeslotId: originalTimeslotId2 });
+			objects.update(objectId2, { timeslotId: originalTimeslotId1 });
 		},
 		undo: () => {
-			objects.update(objectId1, { position: originalPosition1 });
-			objects.update(objectId2, { position: originalPosition2 });
+			objects.update(objectId1, { timeslotId: originalTimeslotId1 });
+			objects.update(objectId2, { timeslotId: originalTimeslotId2 });
 		},
 	};
 }
 
 /**
- * Stack a card in the same timeline slot as another card
+ * Stack a card in the same timeslot as another card
  */
 export function createStackCardsCommand(
 	draggedObjectId: string,
@@ -609,40 +559,21 @@ export function createStackCardsCommand(
 		throw new Error(`Objects not found for stacking`);
 	}
 
-	const originalSlot = draggedObj.timelineSlot;
-	const originalPosition = draggedObj.position;
-
-	// Target slot - use existing or create new slot number
-	const targetSlot = targetObj.timelineSlot ?? Date.now();
-	const needsTargetSlot = targetObj.timelineSlot === undefined;
-
-	// New position: slightly after target to stack below it visually
-	const targetPosition = targetObj.position ?? 1000;
-	const newPosition = targetPosition + 0.001;
+	const originalTimeslotId = draggedObj.timeslotId;
+	const targetTimeslotId = targetObj.timeslotId;
 
 	return {
 		id: crypto.randomUUID(),
 		type: 'stack-cards',
 		description: `Stack "${draggedObj.name}" with "${targetObj.name}"`,
 		execute: () => {
-			// If target doesn't have a slot, assign one to both
-			if (needsTargetSlot) {
-				objects.update(targetObjectId, { timelineSlot: targetSlot });
+			// Move dragged card to same timeslot as target
+			if (targetTimeslotId) {
+				objects.update(draggedObjectId, { timeslotId: targetTimeslotId });
 			}
-			objects.update(draggedObjectId, {
-				timelineSlot: targetSlot,
-				position: newPosition,
-			});
 		},
 		undo: () => {
-			objects.update(draggedObjectId, {
-				timelineSlot: originalSlot,
-				position: originalPosition,
-			});
-			// If we assigned a new slot to target, remove it
-			if (needsTargetSlot) {
-				objects.update(targetObjectId, { timelineSlot: undefined });
-			}
+			objects.update(draggedObjectId, { timeslotId: originalTimeslotId });
 		},
 	};
 }

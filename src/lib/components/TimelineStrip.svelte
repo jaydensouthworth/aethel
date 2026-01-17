@@ -21,10 +21,11 @@
   let boxEnd = $state({ x: 0, y: 0 });
 
   // Reactive store values
+  // Note: This component is deprecated in v3 - use SingleTrackTimeline instead
   const placements = $derived(timeline.allPlacements);
-  const placementsByTrack = $derived(timeline.byTrack);
-  const trackCountValue = $derived(timeline.trackCount);
-  const markersValue = $derived(timeline.markers);
+  const placementsByTrack = $derived(new Map<number, TPlacement[]>([[0, timeline.allPlacements]])); // Stub for v3
+  const trackCountValue = $derived(1); // v3 has single track
+  const markersValue = $derived([] as TimelineMarker[]); // Deprecated
 
   // Computed values
   const zoom = $derived(timelineEditor.zoom);
@@ -33,26 +34,26 @@
   const selectionBox = $derived(timelineEditor.selectionBox);
 
   // Calculate visible range based on zoom and scroll
+  // Note: In v3 timeslot model, bounds are based on timeslot count
   function getVisibleRange() {
-    const bounds = timeline.bounds;
-    const totalRange = bounds.max - bounds.min || 10;
+    const min = 0;
+    const max = timeline.timeslotOrder.length;
+    const totalRange = max - min || 10;
     const visibleWidth = totalRange / zoom;
     return {
-      min: bounds.min + scrollOffset,
-      max: bounds.min + scrollOffset + visibleWidth,
+      min: min + scrollOffset,
+      max: min + scrollOffset + visibleWidth,
     };
   }
 
   // Calculate left position for a placement based on visible range
+  // Note: In v3, placements don't have position - use timeslot index
   function getPlacementStyle(placement: TPlacement): string {
     const visible = getVisibleRange();
     const range = visible.max - visible.min || 1;
-    const leftPercent = ((placement.position - visible.min) / range) * 100;
-
-    if (placement.endPosition != null) {
-      const widthPercent = ((placement.endPosition - placement.position) / range) * 100;
-      return `left: ${leftPercent}%; width: ${Math.max(widthPercent, 2)}%;`;
-    }
+    // Stub: Use timeslot index as position
+    const placementIndex = timeline.getTimeslotIndex(placement.timeslotId);
+    const leftPercent = ((placementIndex - visible.min) / range) * 100;
 
     return `left: ${leftPercent}%;`;
   }
@@ -61,7 +62,7 @@
   function getCursorLeftPercent(): number {
     const visible = getVisibleRange();
     const range = visible.max - visible.min || 1;
-    return ((timeline.cursorPosition - visible.min) / range) * 100;
+    return ((timeline.cursorIndex - visible.min) / range) * 100;
   }
 
   // Convert screen X to timeline position
@@ -78,8 +79,10 @@
   }
 
   // Check if placement is after cursor (should be dimmed)
+  // In v3, compare timeslot indices
   function isAfterCursor(placement: TPlacement): boolean {
-    return placement.position > timeline.cursorPosition;
+    const placementIndex = timeline.getTimeslotIndex(placement.timeslotId);
+    return placementIndex > timeline.cursorIndex;
   }
 
   function handleToggleCollapse() {
@@ -116,7 +119,8 @@
         timelineEditor.startBoxSelection(e.clientX, e.clientY);
       } else {
         // Click to set cursor and clear selection
-        timeline.setCursorPosition(Math.round(position * 10) / 10);
+        // In v3, use setCursorIndex with rounded integer position
+        timeline.setCursorIndex(Math.round(position));
         timelineEditor.clearSelection();
       }
     }
@@ -188,7 +192,7 @@
 
     function handleMouseMove(e: MouseEvent) {
       const position = screenToTimelinePosition(e.clientX);
-      timeline.setCursorPosition(Math.round(position * 10) / 10);
+      timeline.setCursorIndex(Math.round(position));
     }
 
     function handleMouseUp() {
@@ -234,31 +238,13 @@
 
       if (dragState.type === 'move') {
         if (Math.abs(delta) > 0.01 || trackDelta !== 0) {
-          if (timelineEditor.movementMode === 'magnetic') {
-            // Magnetic move for single placement
-            if (dragState.placementIds.length === 1) {
-              ops.movePlacementMagnetic(
-                dragState.placementIds[0],
-                dragState.currentPosition,
-                dragState.currentTrack
-              );
-            } else {
-              ops.moveSelectedPlacements(delta, trackDelta);
-            }
-          } else {
-            ops.moveSelectedPlacements(delta, trackDelta);
-          }
-        }
-      } else if (dragState.type === 'resize-start' || dragState.type === 'resize-end') {
-        // Resize operation
-        for (const id of dragState.placementIds) {
-          ops.resizePlacement(
-            id,
-            dragState.type === 'resize-start' ? 'start' : 'end',
-            dragState.currentPosition
-          );
+          // In v3 timeslot model, movement is index-based
+          // Multi-placement moves still work via moveSelectedPlacements
+          ops.moveSelectedPlacements(delta, trackDelta);
         }
       }
+      // Note: resize operations are not supported in v3 timeslot model
+      // (placements occupy a single timeslot, no range)
 
       timelineEditor.endDrag();
     }
@@ -291,11 +277,13 @@
     const bottomTrack = Math.floor(boxBottom / trackHeight);
 
     // Find placements in box
+    // In v3 timeslot model, placements don't have position/endPosition/track
     const newSelection = new Set<string>();
     for (const p of placements) {
-      const pEnd = p.endPosition ?? p.position;
-      const inXRange = pEnd >= leftPos && p.position <= rightPos;
-      const inYRange = p.track >= topTrack && p.track <= bottomTrack;
+      const pIndex = timeline.getTimeslotIndex(p.timeslotId);
+      const inXRange = pIndex >= leftPos && pIndex <= rightPos;
+      // In v3 single-track model, all placements are on track 0
+      const inYRange = 0 >= topTrack && 0 <= bottomTrack;
 
       if (inXRange && inYRange) {
         newSelection.add(p.id);
@@ -318,7 +306,7 @@
   function handlePlacementRazor(e: MouseEvent, placement: TPlacement) {
     const position = screenToTimelinePosition(e.clientX);
     const snappedPosition = timelineEditor.snapPosition(position);
-    timeline.setCursorPosition(Math.round(snappedPosition * 10) / 10);
+    timeline.setCursorIndex(Math.round(snappedPosition));
     onplacementsplit?.(placement, snappedPosition);
   }
 
@@ -340,7 +328,7 @@
       {/if}
     </button>
     <div class="header-info">
-      <span class="cursor-position">@ {timeline.cursorPosition.toFixed(1)}</span>
+      <span class="cursor-position">@ {timeline.cursorIndex + 1}</span>
       <span class="zoom-level">{Math.round(zoom * 100)}%</span>
       {#if trackCountValue > 1}
         <span class="track-count">{trackCountValue} tracks</span>
@@ -396,11 +384,11 @@
           {#each trackIndices as trackIndex (trackIndex)}
             {@const trackPlacements = placementsByTrack.get(trackIndex) ?? []}
             {@const isTrackLocked = timelineEditor.isTrackLocked(trackIndex)}
-            {@const track = timeline.getTrack(trackIndex)}
-            {@const isMuted = track?.muted ?? false}
-            {@const hasSoloTracks = timeline.allTracks.some(t => t.solo)}
-            {@const isSolo = track?.solo ?? false}
-            {@const isEffectivelyMuted = isMuted || (hasSoloTracks && !isSolo)}
+            <!-- v3 single-track model: no multi-track features -->
+            {@const isMuted = false}
+            {@const hasSoloTracks = false}
+            {@const isSolo = false}
+            {@const isEffectivelyMuted = false}
             <div
               class="timeline-track"
               class:locked={isTrackLocked}
@@ -434,7 +422,7 @@
                   >
                     <TimelinePlacement
                       {placement}
-                      hasRange={placement.endPosition != null}
+                      hasRange={false}
                       oncontextmenu={(e) => handlePlacementContextMenu(e, placement)}
                       onrazor={(e) => handlePlacementRazor(e, placement)}
                     />

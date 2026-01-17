@@ -9,26 +9,24 @@
 
   let { trackIndex, oncontextmenu }: Props = $props();
 
-  // Get track info
-  const track = $derived(timeline.getTrack(trackIndex));
+  // Note: In v3 timeslot model, multiple tracks are not supported
+  // This component is deprecated but kept for API compatibility
   const isLocked = $derived(timelineEditor.isTrackLocked(trackIndex));
-  const placementCount = $derived((timeline.byTrack.get(trackIndex) ?? []).length);
-  const isMuted = $derived(track?.muted ?? false);
-  const isSolo = $derived(track?.solo ?? false);
+  const placementCount = $derived(timeline.allPlacements.length);
+  let isMuted = $state(false);
+  let isSolo = $state(false);
 
   // Editing state
   let isEditing = $state(false);
   let editName = $state('');
 
   function startEditing() {
-    editName = track?.name ?? `Track ${trackIndex}`;
+    editName = `Track ${trackIndex}`;
     isEditing = true;
   }
 
   function finishEditing() {
-    if (editName.trim()) {
-      timeline.updateTrack(trackIndex, { name: editName.trim() });
-    }
+    // No-op in v3 model - tracks don't have configurable names
     isEditing = false;
   }
 
@@ -45,11 +43,11 @@
   }
 
   function toggleMute() {
-    timeline.updateTrack(trackIndex, { muted: !isMuted });
+    isMuted = !isMuted;
   }
 
   function toggleSolo() {
-    timeline.updateTrack(trackIndex, { solo: !isSolo });
+    isSolo = !isSolo;
   }
 
   function handleContextMenu(e: MouseEvent) {
@@ -65,7 +63,7 @@
   class:locked={isLocked}
   class:muted={isMuted}
   class:solo={isSolo}
-  style:--track-color={track?.color ?? 'var(--text-muted)'}
+  style:--track-color={'var(--text-muted)'}
   oncontextmenu={handleContextMenu}
   ondblclick={startEditing}
 >
@@ -83,7 +81,7 @@
       />
     {:else}
       <span class="track-name" title="Double-click to rename">
-        {track?.name ?? `T${trackIndex}`}
+        Timeline
       </span>
     {/if}
 

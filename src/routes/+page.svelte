@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { objects, timeline, ui, project, timelineEditor, milestones } from '$lib/stores';
-  import { createObject, getObjectType, createMilestone, createSection } from '$lib/types';
+  import { createObject, getObjectType, createMilestone, createSection, createPlacement } from '$lib/types';
   import type { TimelinePlacement, AethelObject } from '$lib/types';
   import ObjectTree from '$lib/components/ObjectTree.svelte';
   import ObjectPropertiesPanel from '$lib/components/ObjectPropertiesPanel.svelte';
@@ -9,7 +9,7 @@
   import SplashScreen from '$lib/components/SplashScreen.svelte';
   import Editor from '$lib/editor/Editor.svelte';
   import SectionTabs from '$lib/components/SectionTabs.svelte';
-  import { handleKeyDown as handleTimelineShortcut } from '$lib/services/timeline-shortcuts';
+  import { editor } from '$lib/services/editor';
 
   // Context menus
   import {
@@ -200,7 +200,7 @@
     return JSON.stringify({
       o: objects.all.length,
       t: timeline.allPlacements.length,
-      c: timeline.cursorPosition,
+      c: timeline.cursorIndex,
     });
   }
 
@@ -221,13 +221,9 @@
     const placements = timeline.getPlacementsForObject(selectedObject.id);
     if (placements.length === 0) return null;
 
-    const cursorPos = timeline.cursorPosition;
-    const atCursor = placements.find((p) => {
-      const end = p.endPosition ?? p.position;
-      return cursorPos >= p.position && cursorPos <= end;
-    });
-
-    return (atCursor ?? placements[0]).id;
+    // In timeslot model, just return the first placement
+    // (split functionality may need to be reimplemented)
+    return placements[0].id;
   }
 
   $effect(() => {
@@ -239,7 +235,7 @@
     ) {
       const placementId = getSplitTargetPlacementId();
       if (placementId) {
-        openSplitDialog(placementId, timeline.cursorPosition);
+        openSplitDialog(placementId, null);
       }
     }
 
@@ -368,7 +364,6 @@
     // Chapter 1 demonstrates the new sections feature (Synopsis + Content)
     const ch1 = createObject('The Long-Expected Party', 'chapter', chaptersFolder.id);
     ch1.rendered = true;
-    ch1.position = 1000;
 
     // Create sections for chapter 1 (book template: Synopsis + Content)
     const ch1Synopsis = createSection('Synopsis', 0);
@@ -415,8 +410,6 @@
 
     const ch2 = createObject('The Shadow of the Past', 'chapter', chaptersFolder.id);
     ch2.rendered = true;
-    ch2.position = 2000;
-    ch2.timelineSlot = 1; // Same slot as ch2b - these happen simultaneously
 
     // Chapter 2 also uses sections
     const ch2Synopsis = createSection('Synopsis', 0);
@@ -440,10 +433,9 @@
     ch2.sections = [ch2Synopsis, ch2Content];
 
     // Parallel chapter - happens at the same time as ch2 (Gandalf's POV)
+    // In timeslot model, they'll share the same timeslot
     const ch2b = createObject("Gandalf's Research", 'chapter', chaptersFolder.id);
     ch2b.rendered = true;
-    ch2b.position = 2000; // Same position as ch2 - stacked together
-    ch2b.timelineSlot = 1; // Same slot as ch2 - stacked together
     ch2b.content = {
       type: 'doc',
       content: [
@@ -462,7 +454,6 @@
 
     const ch3 = createObject('Three is Company', 'chapter', chaptersFolder.id);
     ch3.rendered = true;
-    ch3.position = 3000;
     ch3.content = {
       type: 'doc',
       content: [
@@ -484,7 +475,6 @@
     // "Bilbo's Adventure" is a prologue/flashback - comes first
     const scene1 = createObject("Bilbo's Adventure", 'scene', scenesFolder.id);
     scene1.rendered = true;
-    scene1.position = 500; // Prologue - before Chapter 1
     scene1.content = {
       type: 'doc',
       content: [
@@ -513,8 +503,6 @@
     );
 
     // Create thread objects (narrative arcs are now AethelObjects with isThread=true)
-    // Threads are chapter type (content type) so they can have sections/subthreads
-    // They are not rendered as cards, just used as threads
     const ringThread = createObject("The Ring's Journey", 'chapter', threadsFolder.id);
     ringThread.isThread = true;
     ringThread.rendered = false;
@@ -527,7 +515,6 @@
     frodoThread.rendered = false;
     frodoThread.threadColor = '#3b82f6';
     frodoThread.color = '#3b82f6';
-    // Add subthreads (sections) to Frodo's Arc
     const frodoInner = createSection('Inner Journey', 0);
     frodoInner.content = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: "Frodo's emotional and spiritual growth throughout the story." }] }] };
     const frodoOuter = createSection('Outer Journey', 1);
@@ -539,56 +526,68 @@
     timelineEditor.showThread(ringThread.id);
     timelineEditor.showThread(frodoThread.id);
 
-    // Create timeline placements (v2 single-track model)
-    // Rendered chapters appear as cards in the flow
-    timeline.addCreationV2(ch1.id);
-    timeline.addCreationV2(ch2.id);
-    timeline.addCreationV2(ch2b.id); // Stacked with ch2 (same timelineSlot)
-    timeline.addCreationV2(ch3.id);
+    // === Create timeline with timeslots ===
+    // Timeslot 0: Prologue (Bilbo's Adventure)
+    timeline.addCreation(scene1.id);
 
-    // Scene appears in the flow (between chapters)
-    timeline.addCreationV2(scene1.id);
+    // Timeslot 1: Chapter 1 (The Long-Expected Party)
+    timeline.addCreation(ch1.id);
 
-    // Create a milestone (Act/Part divider) - position 1500 = between ch1 (1000) and ch2 (2000)
-    const act1 = createMilestone('Act I: The Shire', 1500, {
+    // Get ch1's timeslot for mutations attached to it
+    const ch1TimeslotId = ch1.timeslotId!;
+
+    // Timeslot 2: Between ch1 and ch2 - Gandalf researches (offscreen event)
+    const gandalfResearchSlot = timeline.createTimeslotAtEnd();
+    timeline.addMutation(
+      gandalf.id,
+      gandalfResearchSlot,
+      'Gandalf researches the Ring',
+      { knowledge: { from: 'suspicious', to: 'certain' } },
+      { threadIds: [ringThread.id] }
+    );
+
+    // Timeslot 3: Chapter 2 and Chapter 2b (simultaneous - same timeslot)
+    const ch2TimeslotId = timeline.createTimeslotAtEnd();
+    objects.update(ch2.id, { timeslotId: ch2TimeslotId });
+    objects.update(ch2b.id, { timeslotId: ch2TimeslotId }); // Same timeslot = stacked
+    timeline.addPlacement(createPlacement(ch2.id, 'creation', ch2TimeslotId));
+    timeline.addPlacement(createPlacement(ch2b.id, 'creation', ch2TimeslotId));
+
+    // Timeslot 4: Chapter 3 (Three is Company)
+    timeline.addCreation(ch3.id);
+    const ch3TimeslotId = ch3.timeslotId!;
+
+    // Create a milestone before ch2's timeslot
+    const act1 = createMilestone('Act I: The Shire', ch2TimeslotId, {
       color: '#6366f1',
       exportAs: 'act',
     });
     milestones.add(act1);
 
-    // Character mutations - attached below relevant chapters, with thread associations
-    timeline.addMutationBelow(
+    // Character mutations - attached to specific cards at their timeslots
+    timeline.addMutation(
       frodo.id,
-      ch1.id,
+      ch1TimeslotId,
       'Frodo inherits the Ring',
       { hasRing: { from: false, to: true } },
-      [ringThread.id, frodoThread.id]
+      { attachedToCardId: ch1.id, threadIds: [ringThread.id, frodoThread.id] }
     );
-    timeline.addMutationBelow(
+
+    timeline.addMutation(
       frodo.id,
-      ch3.id,
+      ch3TimeslotId,
       'Frodo leaves the Shire',
       { location: { from: 'Bag End', to: 'The Road' } },
-      [frodoThread.id]
+      { attachedToCardId: ch3.id, threadIds: [frodoThread.id] }
     );
 
-    // Item mutations - attached below the chapter where it happens
-    timeline.addMutationBelow(
+    // Item mutations - attached to specific cards
+    timeline.addMutation(
       theRing.id,
-      ch1.id,
+      ch1TimeslotId,
       'Ring passes to Frodo',
       { owner: { from: 'Bilbo', to: 'Frodo' } },
-      [ringThread.id]
-    );
-
-    // Standalone mutation between chapters (off-screen event)
-    // Position 1250 = between ch1 (1000) and milestone (1500)
-    timeline.addMutationBetween(
-      gandalf.id,
-      1250,
-      'Gandalf researches the Ring',
-      { knowledge: { from: 'suspicious', to: 'certain' } },
-      [ringThread.id]
+      { attachedToCardId: ch1.id, threadIds: [ringThread.id] }
     );
   }
 
@@ -698,7 +697,7 @@
   }
 
   // Dialog handlers
-  function openCreateDialog(track: number = 0, position: number = timeline.cursorPosition, parentId: string | null = null) {
+  function openCreateDialog(track: number = 0, position: number = timeline.cursorIndex, parentId: string | null = null) {
     createDialogState = {
       open: true,
       track,
@@ -707,7 +706,7 @@
     };
   }
 
-  function openMutationDialog(objectId: string, position: number = timeline.cursorPosition, track: number = 0) {
+  function openMutationDialog(objectId: string, position: number = timeline.cursorIndex, track: number = 0) {
     mutationDialogState = {
       open: true,
       objectId,
@@ -716,7 +715,7 @@
     };
   }
 
-  function openMarkerDialog(position: number = timeline.cursorPosition, markerId: string | null = null) {
+  function openMarkerDialog(position: number = timeline.cursorIndex, markerId: string | null = null) {
     markerDialogState = {
       open: true,
       position,
@@ -728,7 +727,7 @@
     splitDialogState = {
       open: true,
       placementId,
-      position: position ?? timeline.cursorPosition,
+      position: position ?? timeline.cursorIndex,
     };
   }
 
@@ -739,10 +738,9 @@
     splitDialogState.open = false;
   }
 
-  // Keyboard shortcut handler
+  // Keyboard shortcut handler - all shortcuts go through the editor
   function handleGlobalKeyDown(e: KeyboardEvent) {
-    // Let the timeline shortcut handler try first
-    const handled = handleTimelineShortcut(e);
+    const handled = editor.handleKeyDown(e);
     if (handled) return;
 
     // Additional global shortcuts can be handled here
@@ -897,7 +895,7 @@
   y={placementMenuState.y}
   placement={placementMenuState.placement}
   onClose={() => placementMenuState.open = false}
-  onShowMutationDialog={(_, objectId) => openMutationDialog(objectId, placementMenuState.placement?.position ?? 0)}
+  onShowMutationDialog={(_, objectId) => openMutationDialog(objectId, timeline.cursorIndex)}
   onShowSplitDialog={(placementId) => openSplitDialog(placementId)}
 />
 
@@ -923,7 +921,7 @@
   y={treeMenuState.y}
   object={treeMenuState.object}
   onClose={() => treeMenuState.open = false}
-  onShowCreateDialog={(parentId) => openCreateDialog(0, timeline.cursorPosition, parentId)}
+  onShowCreateDialog={(parentId) => openCreateDialog(0, timeline.cursorIndex, parentId)}
 />
 
 <!-- Dialogs -->
@@ -938,8 +936,6 @@
 <MutationDialog
   open={mutationDialogState.open}
   objectId={mutationDialogState.objectId}
-  position={mutationDialogState.position}
-  track={mutationDialogState.track}
   onClose={() => mutationDialogState.open = false}
 />
 

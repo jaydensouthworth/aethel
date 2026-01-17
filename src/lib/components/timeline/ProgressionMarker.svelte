@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { TimelinePlacement } from '$lib/types';
-  import { milestones } from '$lib/stores';
+  import { milestones, timeline } from '$lib/stores';
 
   interface Props {
     afterIndex: number;
@@ -12,7 +12,10 @@
   let { afterIndex, mutations = [], onaddmilestone, onmutationclick }: Props = $props();
 
   // Check if there's a milestone at this position
-  const milestone = $derived(milestones.getMilestoneAfterIndex(afterIndex));
+  // Milestones appear "before" a timeslot, so to get milestone after index N,
+  // we look for milestones before timeslot at index N+1
+  const nextTimeslotId = $derived(timeline.getTimeslotIdAt(afterIndex + 1) ?? null);
+  const milestone = $derived(milestones.getMilestonesBeforeTimeslot(nextTimeslotId)[0]);
   const hasMilestone = $derived(!!milestone);
   const hasMutations = $derived(mutations.length > 0);
 

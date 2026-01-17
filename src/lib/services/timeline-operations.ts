@@ -1,3 +1,8 @@
+/**
+ * Timeline Operations (v3 - timeslot-based model)
+ * High-level operations that use commands for undo/redo support.
+ */
+
 import { createObject, createPlacement, createMilestone as createMilestoneType } from '$lib/types';
 import type { AethelObject, TimelinePlacement, Milestone } from '$lib/types';
 import { objects } from '$lib/stores/objects.svelte';
@@ -20,17 +25,15 @@ import {
 	createUpdateMilestoneCommand,
 	createDeleteMilestoneCommand,
 	createMoveMilestoneCommand,
-	createChangeMutationDisplayCommand,
 	createToggleRenderedCommand,
 	createToggleThreadCommand,
-	// Drag-drop commands
+	// v3 Drag-drop commands
 	createReorderCardCommand,
 	createMoveMutationCommand,
 	createDuplicateMutationCommand,
 	createSwapCardsCommand,
 	createStackCardsCommand,
 } from './timeline-commands';
-import type { MutationDisplay } from '$lib/types';
 
 // ============================================================================
 // Object Operations
@@ -231,15 +234,15 @@ export function addPlacementsToThread(placementIds: string[], threadId: string):
 }
 
 // ============================================================================
-// v2: Milestone Operations
+// v3: Milestone Operations (timeslot-based)
 // ============================================================================
 
 /**
- * Create a new milestone
+ * Create a new milestone before a specific timeslot
  */
 export function createMilestone(
 	name: string,
-	position: number,
+	beforeTimeslotId: string | null,
 	options?: {
 		color?: string;
 		description?: string;
@@ -247,7 +250,7 @@ export function createMilestone(
 		exportTitle?: string;
 	}
 ): Milestone {
-	const milestone = createMilestoneType(name, position, options);
+	const milestone = createMilestoneType(name, beforeTimeslotId, options);
 	const command = createAddMilestoneCommand(milestone);
 	timelineHistory.execute(command);
 	return milestone;
@@ -273,50 +276,32 @@ export function deleteMilestone(milestoneId: string): void {
 }
 
 /**
- * Move a milestone to a new position
+ * Move a milestone to appear before a different timeslot
  */
-export function moveMilestone(milestoneId: string, newPosition: number): void {
-	const command = createMoveMilestoneCommand(milestoneId, newPosition);
+export function moveMilestone(milestoneId: string, newTimeslotId: string | null): void {
+	const command = createMoveMilestoneCommand(milestoneId, newTimeslotId);
 	timelineHistory.execute(command);
 }
 
 // ============================================================================
-// v2: Mutation Display Operations
+// v3: Mutation Operations (timeslot-based)
 // ============================================================================
 
 /**
- * Set a mutation to display between cards (in the flow)
+ * Add a mutation at the current timeslot (attached to a card)
  */
-export function setMutationDisplayBetween(placementId: string, position: number): void {
-	const command = createChangeMutationDisplayCommand(placementId, 'between', {
-		position,
-	});
-	timelineHistory.execute(command);
-}
-
-/**
- * Set a mutation to display below a card (attached)
- */
-export function setMutationDisplayBelow(placementId: string, attachedToObjectId: string): void {
-	const command = createChangeMutationDisplayCommand(placementId, 'below', {
-		attachedToObjectId,
-	});
-	timelineHistory.execute(command);
-}
-
-/**
- * Add a mutation between cards (v2 - position-based)
- */
-export function addMutationBetweenV2(
+export function addMutationAtCurrent(
 	objectId: string,
-	position: number,
 	label: string,
 	changes: Record<string, { from: unknown; to: unknown }> = {},
+	attachedToCardId?: string,
 	threadIds?: string[]
-): TimelinePlacement {
-	const placement = createPlacement(objectId, 'mutation', {
-		mutationDisplay: 'between',
-		position,
+): TimelinePlacement | null {
+	const currentTimeslotId = timeline.currentTimeslotId;
+	if (!currentTimeslotId) return null;
+
+	const placement = createPlacement(objectId, 'mutation', currentTimeslotId, {
+		attachedToCardId,
 		mutation: { label, changes },
 		threadIds,
 	});
@@ -330,7 +315,49 @@ export function addMutationBetweenV2(
 }
 
 /**
- * Add a mutation below a card (v2)
+ * Add a mutation at a specific timeslot
+ */
+export function addMutation(
+	objectId: string,
+	timeslotId: string,
+	label: string,
+	changes: Record<string, { from: unknown; to: unknown }> = {},
+	options?: {
+		attachedToCardId?: string;
+		threadIds?: string[];
+	}
+): TimelinePlacement {
+	const placement = createPlacement(objectId, 'mutation', timeslotId, {
+		attachedToCardId: options?.attachedToCardId,
+		mutation: { label, changes },
+		threadIds: options?.threadIds,
+	});
+
+	const command = createAddPlacementCommand(placement);
+	timelineHistory.execute(command);
+
+	timelineEditor.selectMutation(placement.id);
+
+	return placement;
+}
+
+/**
+ * Add a mutation "between" cards (in the flow, at the current timeslot)
+ * @deprecated Use addMutationAtCurrent instead
+ */
+export function addMutationBetweenV2(
+	objectId: string,
+	_position: number, // ignored in v3
+	label: string,
+	changes: Record<string, { from: unknown; to: unknown }> = {},
+	threadIds?: string[]
+): TimelinePlacement | null {
+	return addMutationAtCurrent(objectId, label, changes, undefined, threadIds);
+}
+
+/**
+ * Add a mutation "below" a card (attached to it)
+ * @deprecated Use addMutationAtCurrent with attachedToCardId instead
  */
 export function addMutationBelowV2(
 	objectId: string,
@@ -338,24 +365,12 @@ export function addMutationBelowV2(
 	label: string,
 	changes: Record<string, { from: unknown; to: unknown }> = {},
 	threadIds?: string[]
-): TimelinePlacement {
-	const placement = createPlacement(objectId, 'mutation', {
-		mutationDisplay: 'below',
-		attachedToObjectId,
-		mutation: { label, changes },
-		threadIds,
-	});
-
-	const command = createAddPlacementCommand(placement);
-	timelineHistory.execute(command);
-
-	timelineEditor.selectMutation(placement.id);
-
-	return placement;
+): TimelinePlacement | null {
+	return addMutationAtCurrent(objectId, label, changes, attachedToObjectId, threadIds);
 }
 
 // ============================================================================
-// v2: Card Operations
+// v3: Card Operations (timeslot-based)
 // ============================================================================
 
 /**
@@ -368,7 +383,7 @@ export function toggleCardRendered(objectId: string): void {
 
 /**
  * Add an object as a card to the timeline
- * Sets rendered: true and optionally creates a creation placement
+ * Sets rendered: true and creates a creation placement at a new timeslot
  */
 export function addObjectAsCard(objectId: string): void {
 	const obj = objects.get(objectId);
@@ -379,16 +394,8 @@ export function addObjectAsCard(objectId: string): void {
 		return;
 	}
 
-	const batch = timelineHistory.beginBatch(`Add "${obj.name}" to timeline`);
-
-	// Set rendered to true
-	batch.add(createToggleRenderedCommand(objectId));
-
-	// Create a creation placement
-	const placement = createPlacement(objectId, 'creation', {});
-	batch.add(createAddPlacementCommand(placement));
-
-	batch.commit();
+	// Add creation via timeline store (handles timeslot creation)
+	timeline.addCreation(objectId);
 
 	// Select the new card
 	timelineEditor.selectCard(objectId);
@@ -412,7 +419,7 @@ export function removeObjectFromCards(objectId: string): void {
 }
 
 // ============================================================================
-// v2: Navigation Operations
+// v3: Navigation Operations
 // ============================================================================
 
 /**
@@ -454,80 +461,58 @@ export function navigateToObject(objectId: string): void {
 }
 
 // ============================================================================
-// v2: Drag and Drop Operations
+// v3: Drag and Drop Operations (timeslot-based)
 // ============================================================================
 
 /**
- * Reorder a card in the timeline by changing its position.
- * newPosition is the unified position value to assign.
- *
- * This uses the unified position model where all items are sorted by position.
- * The position value determines where in the timeline the card appears.
+ * Reorder a card in the timeline by moving it to a different timeslot index.
  */
-export function reorderCard(objectId: string, newPosition: number): void {
+export function reorderCard(objectId: string, newTimeslotIndex: number): void {
 	const obj = objects.get(objectId);
 	if (!obj) return;
 
-	// Debug: Log the reorder operation
-	console.log('[reorderCard]', {
-		card: obj.name,
-		oldPosition: obj.position,
-		newPosition,
-	});
-
-	// If position hasn't changed, skip
-	if (obj.position === newPosition) {
-		console.log('[reorderCard] No change detected, skipping');
-		return;
-	}
-
-	// Clear timelineSlot to unstack the card from any group
-	const shouldClearSlot = obj.timelineSlot !== undefined;
-
-	const command = createReorderCardCommand(objectId, newPosition, shouldClearSlot);
+	const command = createReorderCardCommand(objectId, newTimeslotIndex);
 	timelineHistory.execute(command);
-
-	// Debug: verify the final order after commit
-	console.log('[reorderCard] After commit:', {
-		finalOrder: timeline.renderedObjects.map((o) => ({
-			name: o.name,
-			position: o.position,
-		})),
-	});
 }
 
 /**
- * Move a mutation to a new position
+ * Move a mutation to a different timeslot
  */
 export function moveMutation(
 	placementId: string,
-	newPos: {
-		display: MutationDisplay;
-		attachedToObjectId?: string;
-		position?: number;
+	options: {
+		timeslotId?: string;
+		attachedToCardId?: string;
 	}
 ): void {
-	const command = createMoveMutationCommand(placementId, newPos);
+	const placement = timeline.getPlacement(placementId);
+	if (!placement) return;
+
+	const newTimeslotId = options.timeslotId ?? placement.timeslotId;
+	const command = createMoveMutationCommand(placementId, newTimeslotId, options.attachedToCardId);
 	timelineHistory.execute(command);
 }
 
 /**
- * Duplicate a mutation at a new position
+ * Duplicate a mutation at a new timeslot
  */
 export function duplicateMutation(
 	sourcePlacementId: string,
-	newPos: {
-		display: MutationDisplay;
-		attachedToObjectId?: string;
-		position?: number;
+	options: {
+		timeslotId?: string;
+		attachedToCardId?: string;
 	}
 ): void {
-	const command = createDuplicateMutationCommand(sourcePlacementId, newPos);
+	const source = timeline.getPlacement(sourcePlacementId);
+	if (!source) return;
+
+	const newTimeslotId = options.timeslotId ?? source.timeslotId;
+	const command = createDuplicateMutationCommand(sourcePlacementId, newTimeslotId, options.attachedToCardId);
 	timelineHistory.execute(command);
 }
 
 /**
- * Swap positions between two cards
+ * Swap timeslots between two cards
  */
 export function swapCards(objectId1: string, objectId2: string): void {
 	const command = createSwapCardsCommand(objectId1, objectId2);
@@ -535,9 +520,70 @@ export function swapCards(objectId1: string, objectId2: string): void {
 }
 
 /**
- * Stack a card in the same timeline slot as another card
+ * Stack a card in the same timeslot as another card
  */
 export function stackCards(draggedObjectId: string, targetObjectId: string): void {
 	const command = createStackCardsCommand(draggedObjectId, targetObjectId);
 	timelineHistory.execute(command);
+}
+
+// ============================================================================
+// Legacy Stubs (for compatibility - to be removed or reimplemented)
+// ============================================================================
+
+/**
+ * @deprecated Use createNewObject + addObjectAsCard instead
+ */
+export function createObjectWithPlacement(
+	name: string,
+	typeId: string,
+	_position: number, // ignored in v3
+	_track: number = 0, // ignored in v3
+	parentId: string | null = null
+): { object: AethelObject; placement: TimelinePlacement } {
+	const object = createNewObject(name, typeId, parentId, { rendered: true });
+	// Add to timeline at end
+	timeline.addCreation(object.id);
+	const placements = timeline.getPlacementsForObject(object.id);
+	const placement = placements.find(p => p.type === 'creation');
+	if (!placement) {
+		throw new Error('Failed to create placement');
+	}
+	return { object, placement };
+}
+
+/**
+ * @deprecated Split functionality not yet implemented in v3
+ */
+export function splitPlacement(_placementId: string, _splitPosition: number): { left: TimelinePlacement; right: TimelinePlacement } | null {
+	console.warn('splitPlacement is not yet implemented in v3 timeslot model');
+	return null;
+}
+
+/**
+ * @deprecated Use duplicateMutation instead
+ */
+export function duplicateSelectedPlacements(): void {
+	console.warn('duplicateSelectedPlacements is not yet implemented in v3 timeslot model');
+}
+
+/**
+ * @deprecated Not applicable in v3 timeslot model
+ */
+export function moveSelectedPlacements(_deltaPosition: number, _deltaTrack: number): void {
+	console.warn('moveSelectedPlacements is not applicable in v3 timeslot model');
+}
+
+/**
+ * @deprecated Paste functionality not yet implemented in v3
+ */
+export function pasteAtCursor(): void {
+	console.warn('pasteAtCursor is not yet implemented in v3 timeslot model');
+}
+
+/**
+ * @deprecated Use addObjectAsCard instead
+ */
+export function addObjectToTimeline(objectId: string, _position: number, _track: number = 0): void {
+	addObjectAsCard(objectId);
 }

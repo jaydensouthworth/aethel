@@ -1,8 +1,8 @@
 <script lang="ts">
   import { timeline, timelineEditor, milestones, objects, ui } from '$lib/stores';
   import { getObjectType } from '$lib/types';
-  import type { TimelinePlacement, Milestone } from '$lib/types';
-  import type { TimelineCard } from '$lib/stores/timeline.svelte';
+  import type { TimelinePlacement, Milestone, AethelObject } from '$lib/types';
+  import type { TimelineCard, TimeslotContents } from '$lib/stores/timeline.svelte';
   import { deleteMilestone, deletePlacement, toggleCardRendered, reorderCard, moveMutation, duplicateMutation, moveMilestone, swapCards, stackCards } from '$lib/services/timeline-operations';
   import { MilestoneDialog, AddMutationDialog, AddExistingObjectDialog, CreateNewObjectDialog, MutationDropDialog, CardDropDialog } from './dialogs';
   import TimelineHeader from './TimelineHeader.svelte';
@@ -13,26 +13,27 @@
 
   let { collapsed = false }: Props = $props();
 
-  // Timeline data
+  // Timeline data (v3 - timeslot-based)
   const cards = $derived(timeline.cards);
-  const mutationsBetween = $derived(timeline.mutationsBetween);
+  const orderedTimeslots = $derived(timeline.orderedTimeslots);
+  const milestonesAtStart = $derived(timeline.milestonesAtStart);
   const allMilestones = $derived(milestones.all);
   const cursorIndex = $derived(timeline.cursorIndex);
   const cardCount = $derived(timeline.cardCount);
 
-  // Dialog state - now uses position instead of afterIndex
+  // Dialog state - now uses timeslot index
   let milestoneDialogOpen = $state(false);
-  let milestoneDialogPosition = $state(500); // Default to position 500 (before first item at 1000)
+  let milestoneDialogTimeslotIndex = $state(0);
   let milestoneDialogEditId = $state<string | null>(null);
 
   let mutationDialogOpen = $state(false);
-  let mutationDialogPosition = $state(500);
+  let mutationDialogTimeslotIndex = $state(0);
 
   let addExistingObjectDialogOpen = $state(false);
-  let addExistingObjectPosition = $state(500);
+  let addExistingObjectTimeslotIndex = $state(0);
 
   let createNewObjectDialogOpen = $state(false);
-  let createNewObjectPosition = $state(500);
+  let createNewObjectTimeslotIndex = $state(0);
 
   // Drag-drop state
   let dragType = $state<'card' | 'mutation' | 'milestone' | null>(null);
@@ -40,10 +41,10 @@
   let dropTargetConnectorKey = $state<string | null>(null);
   let dropTargetObjectId = $state<string | null>(null);
 
-  // Mutation drop dialog state - now uses position
+  // Mutation drop dialog state - now uses timeslotId
   let mutationDropDialogOpen = $state(false);
   let droppedMutationId = $state<string | null>(null);
-  let mutationDropTarget = $state<{ type: 'between' | 'below'; position?: number; attachedToObjectId?: string } | null>(null);
+  let mutationDropTarget = $state<{ type: 'between' | 'below'; timeslotId?: string | null; attachedToCardId?: string } | null>(null);
 
   // Card drop dialog state
   let cardDropDialogOpen = $state(false);
@@ -51,216 +52,77 @@
   let cardDropTargetId = $state<string | null>(null);
 
   // ============================================================================
-  // Slot Groups - Group cards by timelineSlot for stacking
-  // ============================================================================
-
-  interface SlotGroup {
-    slotId: string;
-    cards: TimelineCard[];
-    /** The index of the first card in renderedObjects order */
-    visualPosition: number;
-  }
-
-  /**
-   * Group ADJACENT cards by timelineSlot for stacking.
-   * Only cards that are consecutive in sort order AND have the same
-   * numeric timelineSlot are grouped together.
-   * This ensures visual order always matches actual card index order.
-   */
-  const slotGroups = $derived.by(() => {
-    const groups: SlotGroup[] = [];
-
-    if (cards.length === 0) return groups;
-
-    let currentGroup: TimelineCard[] = [cards[0]];
-    let currentSlot = cards[0].object.timelineSlot;
-
-    for (let i = 1; i < cards.length; i++) {
-      const card = cards[i];
-      const slot = card.object.timelineSlot;
-
-      // Group if: both have numeric slots AND slots match
-      const shouldGroup =
-        typeof currentSlot === 'number' &&
-        typeof slot === 'number' &&
-        slot === currentSlot;
-
-      if (shouldGroup) {
-        currentGroup.push(card);
-      } else {
-        // Flush current group
-        groups.push({
-          slotId: typeof currentSlot === 'number'
-            ? `slot-${currentSlot}-${currentGroup[0].object.id}`
-            : `card-${currentGroup[0].object.id}`,
-          cards: currentGroup,
-          visualPosition: currentGroup[0].index,
-        });
-        // Start new group
-        currentGroup = [card];
-        currentSlot = slot;
-      }
-    }
-
-    // Flush final group
-    groups.push({
-      slotId: typeof currentSlot === 'number'
-        ? `slot-${currentSlot}-${currentGroup[0].object.id}`
-        : `card-${currentGroup[0].object.id}`,
-      cards: currentGroup,
-      visualPosition: currentGroup[0].index,
-    });
-
-    return groups;
-  });
-
-  // ============================================================================
-  // Flow Items - Build flat array for horizontal flexbox layout
-  // Uses unified position model - each connector has unique dropPosition
+  // v3: Timeslot-based Flow Items
+  // Each timeslot contains cards and mutations. Connectors between timeslots
+  // serve as drop zones. Order comes from timeline.orderedTimeslots.
   // ============================================================================
 
   type FlowItem =
-    | { type: 'connector'; key: string; dropPosition: number }
-    | { type: 'card-group'; key: string; slotId: string; group: SlotGroup; position: number }
-    | { type: 'mutation'; key: string; placement: TimelinePlacement; position: number }
-    | { type: 'milestone'; key: string; milestone: Milestone; position: number };
+    | { type: 'connector'; key: string; dropIndex: number }
+    | { type: 'timeslot'; key: string; timeslot: TimeslotContents }
+    | { type: 'milestone'; key: string; milestone: Milestone };
 
   const flowItems = $derived.by(() => {
     const items: FlowItem[] = [];
-    const allItems = timeline.getAllItemsSorted;
 
-    // Connector before first item
-    const firstPos = allItems[0]?.position ?? 1000;
+    // Milestones at the very start (before first timeslot)
+    for (const m of milestonesAtStart) {
+      items.push({
+        type: 'milestone',
+        key: `ms-${m.id}`,
+        milestone: m,
+      });
+    }
+
+    // Connector before first timeslot (drop index 0)
     items.push({
       type: 'connector',
       key: 'conn-start',
-      dropPosition: timeline.getPositionBetween(null, firstPos)
+      dropIndex: 0,
     });
 
-    // Track which cards we've already processed (for grouping)
-    const processedCardIds = new Set<string>();
+    // Iterate over timeslots
+    for (let i = 0; i < orderedTimeslots.length; i++) {
+      const ts = orderedTimeslots[i];
 
-    for (let i = 0; i < allItems.length; i++) {
-      const item = allItems[i];
-      const nextItem = allItems[i + 1];
-
-      if (item.type === 'card') {
-        // Skip if already processed as part of a group
-        if (processedCardIds.has(item.item.id)) continue;
-
-        // Find the slot group this card belongs to
-        const group = slotGroups.find(g => g.cards.some(c => c.object.id === item.item.id));
-        if (group) {
-          // Mark all cards in this group as processed
-          for (const card of group.cards) {
-            processedCardIds.add(card.object.id);
-          }
-
-          // Add card group with position of first card in group
-          items.push({
-            type: 'card-group',
-            key: `group-${group.slotId}`,
-            slotId: group.slotId,
-            group,
-            position: item.position
-          });
-
-          // Find the position after the last card in the group for the connector
-          const lastCardInGroup = group.cards[group.cards.length - 1];
-          const lastCardPos = lastCardInGroup.object.position ?? item.position;
-
-          // Find next item that's NOT in this group
-          let nextNonGroupItem = nextItem;
-          let nextIdx = i + 1;
-          while (nextNonGroupItem && nextNonGroupItem.type === 'card' && group.cards.some(c => c.object.id === nextNonGroupItem!.item.id)) {
-            nextIdx++;
-            nextNonGroupItem = allItems[nextIdx];
-          }
-
-          // Connector after this group
-          items.push({
-            type: 'connector',
-            key: `conn-${lastCardPos}`,
-            dropPosition: timeline.getPositionBetween(lastCardPos, nextNonGroupItem?.position ?? null)
-          });
-        } else {
-          // Fallback: if slotGroups lookup fails (can happen during reactivity updates),
-          // create a minimal single-card group to avoid missing cards
-          processedCardIds.add(item.item.id);
-
-          // Find the card object in the cards array for mutationsBelow
-          const cardObj = cards.find(c => c.object.id === item.item.id);
-          const fallbackGroup: SlotGroup = {
-            slotId: `card-${item.item.id}`,
-            cards: cardObj ? [cardObj] : [{
-              index: 0,
-              object: item.item,
-              placement: null,
-              mutationsBelow: []
-            }],
-            visualPosition: 0
-          };
-
-          items.push({
-            type: 'card-group',
-            key: `group-${fallbackGroup.slotId}`,
-            slotId: fallbackGroup.slotId,
-            group: fallbackGroup,
-            position: item.position
-          });
-
-          // Connector after this card
-          items.push({
-            type: 'connector',
-            key: `conn-${item.position}`,
-            dropPosition: timeline.getPositionBetween(item.position, nextItem?.position ?? null)
-          });
-        }
-      } else if (item.type === 'milestone') {
+      // Milestones that appear before this timeslot
+      for (const m of ts.milestonesBefore) {
         items.push({
           type: 'milestone',
-          key: `ms-${item.item.id}`,
-          milestone: item.item,
-          position: item.position
-        });
-
-        // Connector after milestone
-        items.push({
-          type: 'connector',
-          key: `conn-ms-${item.item.id}`,
-          dropPosition: timeline.getPositionBetween(item.position, nextItem?.position ?? null)
-        });
-      } else if (item.type === 'mutation') {
-        items.push({
-          type: 'mutation',
-          key: `mut-${item.item.id}`,
-          placement: item.item,
-          position: item.position
-        });
-
-        // Connector after mutation
-        items.push({
-          type: 'connector',
-          key: `conn-mut-${item.item.id}`,
-          dropPosition: timeline.getPositionBetween(item.position, nextItem?.position ?? null)
+          key: `ms-${m.id}`,
+          milestone: m,
         });
       }
-    }
 
-    // Deduplicate consecutive connectors (keep only the last one before each non-connector)
-    const dedupedItems: FlowItem[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const next = items[i + 1];
-      // Skip this connector if the next item is also a connector
-      if (item.type === 'connector' && next?.type === 'connector') {
-        continue;
+      // The timeslot itself (contains cards and mutations)
+      if (ts.cards.length > 0 || ts.mutations.length > 0) {
+        items.push({
+          type: 'timeslot',
+          key: `ts-${ts.timeslotId}`,
+          timeslot: ts,
+        });
       }
-      dedupedItems.push(item);
+
+      // Connector after this timeslot (drop index i+1)
+      items.push({
+        type: 'connector',
+        key: `conn-${ts.timeslotId}`,
+        dropIndex: i + 1,
+      });
     }
 
-    return dedupedItems;
+    return items;
   });
+
+  // Helper to get cards in a timeslot as TimelineCard objects
+  function getCardsForTimeslot(ts: TimeslotContents): TimelineCard[] {
+    return cards.filter(c => c.object.timeslotId === ts.timeslotId);
+  }
+
+  // Get mutations in a timeslot that are NOT attached to a specific card (shown "between")
+  function getUnattachedMutations(ts: TimeslotContents): TimelinePlacement[] {
+    return ts.mutations.filter(m => !m.attachedToCardId);
+  }
 
   // ============================================================================
   // Reset component state when data changes drastically (e.g., New Project)
@@ -312,13 +174,14 @@
     const getPlacement = (objectId: string, type: 'creation' | 'mutation' = 'creation') =>
       allPlacements.find(p => p.objectId === objectId && p.type === type);
 
-    const getMutationsBelow = (attachedToObjectId: string) =>
-      allPlacements.filter(p => p.type === 'mutation' && p.mutationDisplay === 'below' && p.attachedToObjectId === attachedToObjectId);
+    // Get mutations attached to a specific card
+    const getMutationsBelow = (attachedToCardId: string) =>
+      allPlacements.filter(p => p.type === 'mutation' && p.attachedToCardId === attachedToCardId);
 
     const map = new Map<string, Set<string>>(); // slotId -> Set of threadIds
     const subthreadMap = new Map<string, Set<string>>(); // slotId -> Set of "threadId:sectionId"
 
-    for (const group of slotGroups) {
+    for (const group of orderedTimeslots) {
       const threadIds = new Set<string>();
       const subthreadKeys = new Set<string>();
       // Track which threadIds have subthread targeting defined on the card's creation placement
@@ -327,8 +190,9 @@
 
       for (const card of group.cards) {
         // Get FRESH placement data directly from allPlacements
-        const placement = getPlacement(card.object.id, 'creation');
-        const mutationsBelow = getMutationsBelow(card.object.id);
+        // Note: group.cards is AethelObject[], so card is the object itself
+        const placement = getPlacement(card.id, 'creation');
+        const mutationsBelow = getMutationsBelow(card.id);
 
         // Check the card's own placement (creation/reference) for thread membership
         if (placement?.threadIds) {
@@ -393,10 +257,10 @@
         }
       }
       if (threadIds.size > 0) {
-        map.set(group.slotId, threadIds);
+        map.set(group.timeslotId, threadIds);
       }
       if (subthreadKeys.size > 0) {
-        subthreadMap.set(group.slotId, subthreadKeys);
+        subthreadMap.set(group.timeslotId, subthreadKeys);
       }
     }
     return { threads: map, subthreads: subthreadMap };
@@ -556,14 +420,15 @@
       return;
     }
 
-    // Find which slot group contains the current card
-    const group = slotGroups.find(g => g.cards.some(c => c.object.id === currentCard.object.id));
-    if (!group) {
+    // Find which timeslot contains the current card
+    // Note: ts.cards is AethelObject[], currentCard is TimelineCard
+    const timeslot = orderedTimeslots.find(ts => ts.cards.some(c => c.id === currentCard.object.id));
+    if (!timeslot) {
       cursorHighlight = { leftPx: 0, widthPx: 0, hasPosition: false };
       return;
     }
 
-    const cardGroupEl = cardGroupEls.get(group.slotId);
+    const cardGroupEl = cardGroupEls.get(timeslot.timeslotId);
     if (!cardGroupEl) {
       cursorHighlight = { leftPx: 0, widthPx: 0, hasPosition: false };
       return;
@@ -727,23 +592,9 @@
 
   function handleKeyDown(e: KeyboardEvent) {
     if (collapsed) return;
+    // Arrow keys, Home, End are handled by the global editor keyboard handler
+    // We only handle Enter here for selecting the current card
     switch (e.key) {
-      case 'ArrowRight':
-        e.preventDefault();
-        timeline.cursorNext();
-        break;
-      case 'ArrowLeft':
-        e.preventDefault();
-        timeline.cursorPrev();
-        break;
-      case 'Home':
-        e.preventDefault();
-        timeline.cursorFirst();
-        break;
-      case 'End':
-        e.preventDefault();
-        timeline.cursorLast();
-        break;
       case 'Enter':
         if (timeline.currentCard) {
           ui.select(timeline.currentCard.id);
@@ -754,8 +605,12 @@
 
   function handleCardClick(e: MouseEvent, objectId: string, index: number) {
     e.stopPropagation();
-    timelineEditor.selectCard(objectId);
+    // Set cursor first, then sync selection (selectCard also moves cursor, so this is belt-and-suspenders)
     timeline.setCursorIndex(index);
+    // Use direct state updates to avoid double cursor movement
+    timelineEditor.selectedCardId = objectId;
+    timelineEditor.selectedMutationIds = new Set();
+    ui.select(objectId);
   }
 
   function handleCardDoubleClick(objectId: string) {
@@ -769,53 +624,117 @@
     // Set this mutation as the active mutation for editing
     ui.setActiveMutation(mutation.id);
 
-    // For inline mutations (between cards), don't move the card cursor
-    // The highlight will be positioned on the mutation element itself
+    // For inline mutations (between cards), set anchor and navigate to mutation's timeslot
     if (isInline) {
-      // Just trigger a remeasure so the highlight updates
+      // Find the card index for this mutation's timeslot
+      const timeslotIndex = timeline.getTimeslotIndex(mutation.timeslotId);
+      const targetIndex = Math.max(0, timeslotIndex);
+      // Navigate with anchor so user can return to previous position
+      timeline.navigateWithAnchor(targetIndex);
+      // Update selection state
+      const card = timeline.getCardAt(targetIndex);
+      if (card) {
+        timelineEditor.selectedCardId = card.object.id;
+        timelineEditor.selectedMutationIds = new Set();
+      }
       requestAnimationFrame(() => measureCursorPosition());
       return;
     }
 
-    // Move cursor to the card this mutation is attached to
+    // Move cursor to the card this mutation is attached to (with anchor)
     if (cardIndex !== undefined) {
-      timeline.setCursorIndex(cardIndex);
-    } else if (mutation.attachedToObjectId) {
-      const idx = timeline.getCardIndex(mutation.attachedToObjectId);
-      if (idx >= 0) timeline.setCursorIndex(idx);
+      timeline.navigateWithAnchor(cardIndex);
+      const card = timeline.getCardAt(cardIndex);
+      if (card) {
+        timelineEditor.selectedCardId = card.object.id;
+        timelineEditor.selectedMutationIds = new Set();
+      }
+    } else if (mutation.attachedToCardId) {
+      const idx = timeline.getCardIndex(mutation.attachedToCardId);
+      if (idx >= 0) {
+        timeline.navigateWithAnchor(idx);
+        timelineEditor.selectedCardId = mutation.attachedToCardId;
+        timelineEditor.selectedMutationIds = new Set();
+      }
     }
   }
 
   let expandedConnectorKey = $state<string | null>(null);
+  let expandedTimeslotId = $state<string | null>(null);
 
   function handleConnectorClick(e: MouseEvent, connectorKey: string) {
     e.stopPropagation();
     expandedConnectorKey = expandedConnectorKey === connectorKey ? null : connectorKey;
+    expandedTimeslotId = null;
   }
 
-  function openMilestoneDialog(position: number, editId: string | null = null) {
-    milestoneDialogPosition = position;
+  function handleTimeslotAddClick(e: MouseEvent, timeslotId: string, timeslotIndex: number) {
+    e.stopPropagation();
+    expandedTimeslotId = expandedTimeslotId === timeslotId ? null : timeslotId;
+    expandedConnectorKey = null;
+  }
+
+  function openMilestoneDialog(dropIndex: number, editId: string | null = null) {
+    milestoneDialogTimeslotIndex = dropIndex;
     milestoneDialogEditId = editId;
     milestoneDialogOpen = true;
     expandedConnectorKey = null;
   }
 
-  function openMutationDialog(position: number) {
-    mutationDialogPosition = position;
+  function openMilestoneDialogForEdit(milestoneId: string) {
+    // For editing, find the timeslot index
+    const m = milestones.get(milestoneId);
+    const tsIndex = m?.timeslotId ? timeline.getTimeslotIndex(m.timeslotId) : 0;
+    milestoneDialogTimeslotIndex = tsIndex >= 0 ? tsIndex : 0;
+    milestoneDialogEditId = milestoneId;
+    milestoneDialogOpen = true;
+    expandedConnectorKey = null;
+  }
+
+  function openMutationDialog(dropIndex: number) {
+    mutationDialogTimeslotIndex = dropIndex;
     mutationDialogOpen = true;
     expandedConnectorKey = null;
   }
 
-  function openAddExistingObjectDialog(position: number) {
-    addExistingObjectPosition = position;
+  function openAddExistingObjectDialog(dropIndex: number) {
+    addExistingObjectTimeslotIndex = dropIndex;
     addExistingObjectDialogOpen = true;
     expandedConnectorKey = null;
   }
 
-  function openCreateNewObjectDialog(position: number) {
-    createNewObjectPosition = position;
+  function openCreateNewObjectDialog(dropIndex: number) {
+    createNewObjectTimeslotIndex = dropIndex;
     createNewObjectDialogOpen = true;
     expandedConnectorKey = null;
+  }
+
+  // Functions for adding to existing timeslots (via the + button on timeslot)
+  function openMutationDialogForTimeslot(timeslotId: string) {
+    const index = timeline.getTimeslotIndex(timeslotId);
+    if (index >= 0) {
+      mutationDialogTimeslotIndex = index;
+      mutationDialogOpen = true;
+    }
+    expandedTimeslotId = null;
+  }
+
+  function openAddExistingObjectDialogForTimeslot(timeslotId: string) {
+    const index = timeline.getTimeslotIndex(timeslotId);
+    if (index >= 0) {
+      addExistingObjectTimeslotIndex = index;
+      addExistingObjectDialogOpen = true;
+    }
+    expandedTimeslotId = null;
+  }
+
+  function openCreateNewObjectDialogForTimeslot(timeslotId: string) {
+    const index = timeline.getTimeslotIndex(timeslotId);
+    if (index >= 0) {
+      createNewObjectTimeslotIndex = index;
+      createNewObjectDialogOpen = true;
+    }
+    expandedTimeslotId = null;
   }
 
   function handleRemoveMilestone(milestoneId: string) {
@@ -844,6 +763,7 @@
 
   function handleTimelineClick() {
     expandedConnectorKey = null;
+    expandedTimeslotId = null;
   }
 
   // ============================================================================
@@ -913,26 +833,28 @@
     }
   }
 
-  function handleConnectorDrop(e: DragEvent, dropPosition: number) {
+  function handleConnectorDrop(e: DragEvent, dropIndex: number) {
     e.preventDefault();
 
     console.log('[handleConnectorDrop]', {
-      dropPosition,
+      dropIndex,
       draggedId,
       dragType
     });
 
     if (dragType === 'card' && draggedId) {
-      // Reorder card to the drop position
-      reorderCard(draggedId, dropPosition);
+      // Reorder card to the drop index
+      reorderCard(draggedId, dropIndex);
     } else if (dragType === 'mutation' && draggedId) {
-      // Show mutation drop dialog with position
+      // Get the timeslot ID at this index for mutation drop
+      const timeslotId = timeline.getTimeslotIdAt(dropIndex) ?? timeline.currentTimeslotId;
       droppedMutationId = draggedId;
-      mutationDropTarget = { type: 'between', position: dropPosition };
+      mutationDropTarget = { type: 'between', timeslotId };
       mutationDropDialogOpen = true;
     } else if (dragType === 'milestone' && draggedId) {
-      // Move milestone to new position
-      moveMilestone(draggedId, dropPosition);
+      // Move milestone to appear before the timeslot at dropIndex
+      const targetTimeslotId = timeline.getTimeslotIdAt(dropIndex) ?? null;
+      moveMilestone(draggedId, targetTimeslotId);
     }
 
     dropTargetConnectorKey = null;
@@ -966,7 +888,7 @@
     if (dragType === 'mutation' && draggedId) {
       // Existing mutation drop behavior
       droppedMutationId = draggedId;
-      mutationDropTarget = { type: 'below', attachedToObjectId: objectId };
+      mutationDropTarget = { type: 'below', attachedToCardId: objectId };
       mutationDropDialogOpen = true;
     } else if (dragType === 'card' && draggedId && draggedId !== objectId) {
       // Card-to-card drop - show dialog
@@ -984,9 +906,8 @@
   function handleMutationDropMove() {
     if (!droppedMutationId || !mutationDropTarget) return;
     moveMutation(droppedMutationId, {
-      display: mutationDropTarget.type,
-      position: mutationDropTarget.position,
-      attachedToObjectId: mutationDropTarget.attachedToObjectId,
+      timeslotId: mutationDropTarget.timeslotId ?? undefined,
+      attachedToCardId: mutationDropTarget.attachedToCardId,
     });
     closeMutationDropDialog();
   }
@@ -994,18 +915,18 @@
   function handleMutationDropDuplicate() {
     if (!droppedMutationId || !mutationDropTarget) return;
     duplicateMutation(droppedMutationId, {
-      display: mutationDropTarget.type,
-      position: mutationDropTarget.position,
-      attachedToObjectId: mutationDropTarget.attachedToObjectId,
+      timeslotId: mutationDropTarget.timeslotId ?? undefined,
+      attachedToCardId: mutationDropTarget.attachedToCardId,
     });
     closeMutationDropDialog();
   }
 
   function handleMutationDropNewMutation() {
     if (!droppedMutationId || !mutationDropTarget) return;
-    // Open mutation dialog at new position
-    if (mutationDropTarget.position !== undefined) {
-      mutationDialogPosition = mutationDropTarget.position;
+    // Open mutation dialog at the timeslot
+    if (mutationDropTarget.timeslotId) {
+      const tsIndex = timeline.getTimeslotIndex(mutationDropTarget.timeslotId);
+      mutationDialogTimeslotIndex = tsIndex >= 0 ? tsIndex : 0;
       mutationDialogOpen = true;
     }
     closeMutationDropDialog();
@@ -1087,45 +1008,47 @@
               class:expanded={expandedConnectorKey === item.key}
               class:drop-active={dropTargetConnectorKey === item.key}
               data-connector-key={item.key}
-              data-drop-position={item.dropPosition}
+              data-drop-index={item.dropIndex}
               ondragover={(e) => handleConnectorDragOver(e, item.key)}
               ondragleave={() => handleConnectorDragLeave(item.key)}
-              ondrop={(e) => handleConnectorDrop(e, item.dropPosition)}
+              ondrop={(e) => handleConnectorDrop(e, item.dropIndex)}
             >
               <button class="node-btn" onclick={(e) => handleConnectorClick(e, item.key)}>+</button>
               {#if expandedConnectorKey === item.key}
                 <div class="node-menu">
-                  <button onclick={() => openMutationDialog(item.dropPosition)}>
+                  <button onclick={() => openMutationDialog(item.dropIndex)}>
                     <span class="menu-icon">~</span> Add Mutation
                   </button>
-                  <button onclick={() => openAddExistingObjectDialog(item.dropPosition)}>
+                  <button onclick={() => openAddExistingObjectDialog(item.dropIndex)}>
                     <span class="menu-icon">&#8250;</span> Add Existing Object
                   </button>
-                  <button onclick={() => openCreateNewObjectDialog(item.dropPosition)}>
+                  <button onclick={() => openCreateNewObjectDialog(item.dropIndex)}>
                     <span class="menu-icon">+</span> Create New Object
                   </button>
-                  <button onclick={() => openMilestoneDialog(item.dropPosition)}>
+                  <button onclick={() => openMilestoneDialog(item.dropIndex)}>
                     <span class="menu-icon">|</span> Add Milestone
                   </button>
                 </div>
               {/if}
             </div>
 
-          {:else if item.type === 'card-group'}
-            {@const group = item.group}
-            {@const isStacked = group.cards.length > 1}
+          {:else if item.type === 'timeslot'}
+            {@const ts = item.timeslot}
+            {@const tsCards = getCardsForTimeslot(ts)}
+            {@const isStacked = tsCards.length > 1}
+            {@const standaloneMutations = getUnattachedMutations(ts)}
 
             <div
               class="flow-item card-group"
               class:stacked={isStacked}
-              use:registerCardGroup={item.slotId}
+              use:registerCardGroup={ts.timeslotId}
             >
               {#if isStacked}
                 <div class="stack-indicator"></div>
               {/if}
 
               <div class="cards-column">
-                {#each group.cards as card (card.object.id)}
+                {#each tsCards as card (card.object.id)}
                   {@const obj = card.object}
                   {@const objType = getObjectType(obj.typeId)}
                   {@const color = objects.getEffectiveColor(obj.id)}
@@ -1201,34 +1124,53 @@
                     {/if}
                   </div>
                 {/each}
-              </div>
-            </div>
 
-          {:else if item.type === 'mutation'}
-            {@const mut = item.placement}
-            {@const mutObj = objects.get(mut.objectId)}
-            {@const mutColor = mutObj ? objects.getEffectiveColor(mutObj.id) : '#888'}
-            {@const isActiveMutation = ui.activeMutationId === mut.id}
-
-            <div
-              class="flow-item inline-mut"
-              use:registerInlineMutation={mut.id}
-            >
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div
-                class="mut-chip standalone"
-                class:dragging={draggedId === mut.id && dragType === 'mutation'}
-                class:active={isActiveMutation}
-                style:--mc={mutColor}
-                draggable="true"
-                ondragstart={(e) => handleMutationDragStart(e, mut.id)}
-                ondragend={handleMutationDragEnd}
-                onclick={(e) => handleMutationClick(e, mut, undefined, true)}
-              >
-                <span>{mut.mutation?.label ?? '~'}</span>
-                <button class="mut-x" onclick={(e) => { e.stopPropagation(); handleRemoveMutation(mut.id); }}>×</button>
+                <!-- Standalone mutations (not attached to any card) -->
+                {#if standaloneMutations.length > 0}
+                  <div class="standalone-mutations">
+                    {#each standaloneMutations as mutation (mutation.id)}
+                      {@const mutObj = objects.get(mutation.objectId)}
+                      {@const mutColor = mutObj ? objects.getEffectiveColor(mutObj.id) : '#888'}
+                      <!-- svelte-ignore a11y_click_events_have_key_events -->
+                      <!-- svelte-ignore a11y_no_static_element_interactions -->
+                      <div
+                        class="mut-chip standalone"
+                        class:dragging={draggedId === mutation.id && dragType === 'mutation'}
+                        style:--mc={mutColor}
+                        draggable="true"
+                        ondragstart={(e) => handleMutationDragStart(e, mutation.id)}
+                        ondragend={handleMutationDragEnd}
+                        onclick={(e) => handleMutationClick(e, mutation, ts.index)}
+                      >
+                        <span class="mut-icon">~</span>
+                        <span>{mutation.mutation?.label ?? 'Changed'}</span>
+                        <button class="mut-x" onclick={(e) => { e.stopPropagation(); handleRemoveMutation(mutation.id); }}>×</button>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
               </div>
+
+              <!-- Add more button - absolutely positioned below -->
+              <button
+                class="timeslot-add-btn"
+                class:expanded={expandedTimeslotId === ts.timeslotId}
+                onclick={(e) => handleTimeslotAddClick(e, ts.timeslotId, ts.index)}
+                title="Add mutation, object, or milestone"
+              >+</button>
+              {#if expandedTimeslotId === ts.timeslotId}
+                <div class="timeslot-add-menu">
+                  <button onclick={() => { openMutationDialogForTimeslot(ts.timeslotId); }}>
+                    <span class="menu-icon">~</span> Add Mutation
+                  </button>
+                  <button onclick={() => { openAddExistingObjectDialogForTimeslot(ts.timeslotId); }}>
+                    <span class="menu-icon">›</span> Add Existing Object
+                  </button>
+                  <button onclick={() => { openCreateNewObjectDialogForTimeslot(ts.timeslotId); }}>
+                    <span class="menu-icon">+</span> Create New Object
+                  </button>
+                </div>
+              {/if}
             </div>
 
           {:else if item.type === 'milestone'}
@@ -1243,7 +1185,7 @@
               draggable="true"
               ondragstart={(e) => handleMilestoneDragStart(e, m.id)}
               ondragend={handleMilestoneDragEnd}
-              ondblclick={() => openMilestoneDialog(m.position, m.id)}
+              ondblclick={() => openMilestoneDialogForEdit(m.id)}
             >
               <div class="ml-line"></div>
               <div class="ml-badge">
@@ -1366,26 +1308,26 @@
 <!-- Dialogs -->
 <MilestoneDialog
   open={milestoneDialogOpen}
-  position={milestoneDialogPosition}
+  timeslotIndex={milestoneDialogTimeslotIndex}
   milestoneId={milestoneDialogEditId}
   onClose={() => milestoneDialogOpen = false}
 />
 
 <AddMutationDialog
   open={mutationDialogOpen}
-  position={mutationDialogPosition}
+  timeslotIndex={mutationDialogTimeslotIndex}
   onClose={() => mutationDialogOpen = false}
 />
 
 <AddExistingObjectDialog
   open={addExistingObjectDialogOpen}
-  position={addExistingObjectPosition}
+  timeslotIndex={addExistingObjectTimeslotIndex}
   onClose={() => addExistingObjectDialogOpen = false}
 />
 
 <CreateNewObjectDialog
   open={createNewObjectDialogOpen}
-  position={createNewObjectPosition}
+  timeslotIndex={createNewObjectTimeslotIndex}
   onClose={() => createNewObjectDialogOpen = false}
 />
 
@@ -2016,6 +1958,105 @@
     opacity: 1;
     background: var(--error-bg);
     color: var(--error-text);
+  }
+
+  .mut-icon {
+    font-size: 0.875rem;
+    font-weight: bold;
+    opacity: 0.7;
+  }
+
+  /* Standalone mutations (not attached to any card) */
+  .standalone-mutations {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: var(--card-width);
+  }
+
+  .mut-chip.standalone {
+    border-left-width: 4px;
+    background: color-mix(in srgb, var(--mc) 15%, var(--surface-raised));
+  }
+
+  /* Timeslot add button - absolutely positioned below content */
+  .timeslot-add-btn {
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    background: var(--surface-raised);
+    border: 1px dashed var(--border-subtle);
+    border-radius: 50%;
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.15s ease;
+    z-index: 5;
+  }
+
+  .card-group:hover .timeslot-add-btn,
+  .timeslot-add-btn.expanded {
+    opacity: 1;
+  }
+
+  .timeslot-add-btn:hover {
+    background: var(--hover-bg);
+    border-color: var(--border-default);
+    color: var(--text-primary);
+  }
+
+  .timeslot-add-menu {
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100%);
+    margin-top: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    z-index: 50;
+    min-width: 160px;
+  }
+
+  .timeslot-add-menu button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-align: left;
+    color: var(--text-primary);
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .timeslot-add-menu button:hover {
+    background: var(--hover-bg);
+  }
+
+  .timeslot-add-menu .menu-icon {
+    width: 16px;
+    text-align: center;
+    font-size: 0.875rem;
+    color: var(--text-tertiary);
   }
 
   /* Inline mutation (between cards) */

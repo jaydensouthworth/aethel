@@ -152,15 +152,18 @@ export function createEditorContext(): EditorContextValue {
 
     // Timeline integration
     getCursorPosition() {
-      // v2: Return cursor index (card-based)
+      // Return cursor index (timeslot-based)
       return timeline.cursorIndex;
     },
 
     addMutation(objectId, label, changes) {
-      // v2: Add mutation below the current card
+      // Add mutation at the current timeslot, attached to the current card
       const currentCard = timeline.currentCard;
-      if (currentCard) {
-        timeline.addMutationBelow(objectId, currentCard.id, label, changes);
+      const currentTimeslotId = timeline.currentTimeslotId;
+      if (currentCard && currentTimeslotId) {
+        timeline.addMutation(objectId, currentTimeslotId, label, changes, {
+          attachedToCardId: currentCard.id,
+        });
       }
     },
 
@@ -171,6 +174,37 @@ export function createEditorContext(): EditorContextValue {
     // Navigation
     selectObject(id: string) {
       ui.select(id);
+
+      const obj = objects.get(id);
+      if (!obj) return;
+
+      // Use anchor index if available (we're temporarily viewing something else)
+      // Otherwise use current cursor index
+      const referenceIndex = timeline.anchorIndex ?? timeline.cursorIndex;
+
+      // Get mutations at or before the reference timeslot
+      // This is the key benefit of the timeslot model - this comparison is trivial!
+      const relevantMutations = timeline.getMutationsAtOrBefore(id, referenceIndex);
+
+      if (relevantMutations.length > 0) {
+        // Get the most recent mutation (last in the sorted array)
+        const mostRecentMutation = relevantMutations[relevantMutations.length - 1];
+
+        // Navigate to that mutation's timeslot
+        const targetIndex = timeline.getTimeslotIndex(mostRecentMutation.timeslotId);
+        if (targetIndex >= 0) {
+          timeline.navigateWithAnchor(targetIndex);
+          ui.setActiveMutation(mostRecentMutation.id);
+        }
+      } else if (obj.rendered && obj.timeslotId) {
+        // Object has no mutations but is rendered - move cursor to its timeslot
+        const cardIndex = timeline.getTimeslotIndex(obj.timeslotId);
+        if (cardIndex >= 0 && cardIndex !== timeline.cursorIndex) {
+          timeline.navigateWithAnchor(cardIndex);
+        }
+      }
+      // If object is not rendered and has no mutations, just select it in UI
+      // (cursor stays where it is - this is a non-timeline object)
     },
 
     // Event system

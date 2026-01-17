@@ -3,6 +3,7 @@
   import ContextMenu from './ContextMenu.svelte';
   import ContextMenuItem from './ContextMenuItem.svelte';
   import { objects } from '$lib/stores/objects.svelte';
+  import { timeline } from '$lib/stores';
 
   const ctx = getEditorContext();
 
@@ -215,7 +216,7 @@
             {#each objectMutations().past as mutation}
               <button class="mutation-item" onclick={() => {}}>
                 <span class="mutation-label">{mutation.mutation?.label || 'Unnamed'}</span>
-                <span class="mutation-position">@{mutation.position}</span>
+                <span class="mutation-position">@{timeline.getTimeslotIndex(mutation.timeslotId) + 1}</span>
               </button>
             {/each}
           </div>
@@ -226,7 +227,7 @@
             {#each objectMutations().future as mutation}
               <button class="mutation-item" onclick={() => {}}>
                 <span class="mutation-label">{mutation.mutation?.label || 'Unnamed'}</span>
-                <span class="mutation-position">@{mutation.position}</span>
+                <span class="mutation-position">@{timeline.getTimeslotIndex(mutation.timeslotId) + 1}</span>
               </button>
             {/each}
           </div>

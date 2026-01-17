@@ -1,9 +1,9 @@
 /**
- * Timeline store with single-track card-based model (v2)
+ * Timeline store with timeslot-based model (v3)
  * Uses Svelte 5 Runes for reactivity
  *
- * The timeline is now a single ordered track of "cards" (rendered objects)
- * with mutations appearing either between cards or attached below cards.
+ * The timeline is an ordered array of "timeslots". Everything in a timeslot
+ * happens "at the same time". Items reference timeslots by ID.
  */
 
 import type {
@@ -11,11 +11,11 @@ import type {
   Timeline,
   TimelineMarker,
   TimelinePlacement,
-  MutationDisplay,
   Milestone,
+  Timeslot,
   JSONContent,
 } from '$lib/types';
-import { createPlacement } from '$lib/types';
+import { createPlacement, createTimeslot } from '$lib/types';
 import { objects } from './objects.svelte';
 import { milestones } from './milestones.svelte';
 
@@ -26,7 +26,7 @@ import { milestones } from './milestones.svelte';
 export interface ComputedObjectState {
   objectId: string;
   cursorIndex: number;
-  mutations: TimelinePlacement[]; // Mutations applied (index <= cursor)
+  mutations: TimelinePlacement[]; // Mutations applied (timeslot index <= cursor)
   computedAttributes: Record<string, unknown>;
   // Computed content at this cursor position (base content + all content mutations applied)
   computedContent: JSONContent | null;
@@ -36,7 +36,7 @@ export interface ComputedObjectState {
 }
 
 /**
- * Represents a card on the single-track timeline
+ * Represents a card on the timeline
  */
 export interface TimelineCard {
   index: number;
@@ -46,25 +46,15 @@ export interface TimelineCard {
 }
 
 /**
- * Represents items in the timeline flow (cards, mutations between, milestones)
- * Now uses unified position model
+ * Represents a timeslot with all its contents
  */
-export type TimelineFlowItem =
-  | { type: 'card'; index: number; object: AethelObject; placement: TimelinePlacement | null; position: number }
-  | { type: 'mutation'; placement: TimelinePlacement; position: number }
-  | { type: 'milestone'; milestone: Milestone; position: number };
-
-/**
- * Unified timeline item for position-based sorting
- * All items (cards, milestones, mutations) are sorted together by position
- */
-export type TimelineItem =
-  | { type: 'card'; item: AethelObject; position: number }
-  | { type: 'milestone'; item: Milestone; position: number }
-  | { type: 'mutation'; item: TimelinePlacement; position: number };
-
-// Position spacing constant
-const POSITION_SPACING = 1000;
+export interface TimeslotContents {
+  timeslotId: string;
+  index: number;
+  cards: AethelObject[];
+  mutations: TimelinePlacement[];
+  milestonesBefore: Milestone[]; // Milestones that appear BEFORE this timeslot
+}
 
 // ============================================================================
 // Constants
@@ -84,157 +74,147 @@ class TimelineStore {
     markers: [],
   });
 
+  // All placements (now reference timeslotId)
   allPlacements = $state<TimelinePlacement[]>([]);
+
+  // v3: Ordered list of timeslot IDs (the source of truth for order)
+  timeslotOrder = $state<string[]>([]);
+
+  // v3: Timeslot entities (for ID stability)
+  timeslots = $state<Map<string, Timeslot>>(new Map());
 
   panelHeight = $state<number>(180);
 
-  // v2: Cursor now indexes into rendered objects
+  // Cursor indexes into timeslotOrder
   cursorIndex = $state<number>(0);
 
+  // Anchor: remembers where user came from before navigating to view object state
+  // null means no anchor is set (cursor is at the "home" position)
+  anchorIndex = $state<number | null>(null);
+
   // ============================================================================
-  // v2 Single-Track Derived State
+  // Timeslot Derived State
   // ============================================================================
 
   /**
-   * Ordered rendered objects - the spine of the single-track timeline
-   *
-   * Timeline ordering uses the unified position model:
-   * - All rendered objects are sorted globally by position
-   * - Objects without position fall back to tree position * POSITION_SPACING
-   * - This allows cards to be freely reordered regardless of parentId
-   *
-   * The tree structure (parentId) is preserved for the object panel,
-   * but the timeline uses flat position-based ordering.
+   * Cards grouped by timeslot ID
+   */
+  cardsByTimeslot = $derived.by(() => {
+    const map = new Map<string, AethelObject[]>();
+    for (const obj of objects.all) {
+      if (obj.rendered && obj.timeslotId) {
+        const list = map.get(obj.timeslotId) ?? [];
+        list.push(obj);
+        map.set(obj.timeslotId, list);
+      }
+    }
+    return map;
+  });
+
+  /**
+   * Mutations grouped by timeslot ID
+   */
+  mutationsByTimeslot = $derived.by(() => {
+    const map = new Map<string, TimelinePlacement[]>();
+    for (const p of this.allPlacements) {
+      if (p.type === 'mutation') {
+        const list = map.get(p.timeslotId) ?? [];
+        list.push(p);
+        map.set(p.timeslotId, list);
+      }
+    }
+    return map;
+  });
+
+  /**
+   * Mutations grouped by attached card (for "below" display)
+   */
+  mutationsByAttachment = $derived.by(() => {
+    const map = new Map<string, TimelinePlacement[]>();
+    for (const p of this.allPlacements) {
+      if (p.type === 'mutation' && p.attachedToCardId) {
+        const list = map.get(p.attachedToCardId) ?? [];
+        list.push(p);
+        map.set(p.attachedToCardId, list);
+      }
+    }
+    return map;
+  });
+
+  /**
+   * Milestones grouped by the timeslot they appear BEFORE
+   * Key is timeslotId (or 'start' for milestones at the very beginning)
+   */
+  milestonesByTimeslot = $derived.by(() => {
+    const map = new Map<string | null, Milestone[]>();
+    for (const m of milestones.all) {
+      const key = m.timeslotId;
+      const list = map.get(key) ?? [];
+      list.push(m);
+      map.set(key, list);
+    }
+    return map;
+  });
+
+  /**
+   * All rendered objects in timeline order (based on timeslot order)
    */
   renderedObjects = $derived.by(() => {
-    // First, get tree order for fallback positioning
-    const treeOrder: AethelObject[] = [];
-    const collectRendered = (parentId: string | null) => {
-      const children = objects.byParent.get(parentId) ?? [];
-      for (const child of children) {
-        if (child.rendered) {
-          treeOrder.push(child);
-        }
-        collectRendered(child.id);
-      }
-    };
-    collectRendered(null);
-
-    // If no positions have been set, return tree order
-    const hasAnyPosition = treeOrder.some(obj => obj.position !== undefined);
-    if (!hasAnyPosition) {
-      return treeOrder;
+    const result: AethelObject[] = [];
+    for (const tsId of this.timeslotOrder) {
+      const cards = this.cardsByTimeslot.get(tsId) ?? [];
+      result.push(...cards);
     }
-
-    // Create fallback positions based on tree order
-    const treeFallback = new Map<string, number>();
-    treeOrder.forEach((obj, i) => treeFallback.set(obj.id, (i + 1) * POSITION_SPACING));
-
-    // Sort ALL rendered objects by position (global flat sort)
-    // Objects without position use tree fallback
-    return [...treeOrder].sort((a, b) => {
-      const aPos = a.position ?? treeFallback.get(a.id)!;
-      const bPos = b.position ?? treeFallback.get(b.id)!;
-      return aPos - bPos;
-    });
+    return result;
   });
 
   /**
-   * Get all timeline items (cards, milestones, mutations) sorted by position
-   * This is the unified view of the timeline for rendering
+   * Timeline contents by timeslot - the main data structure for rendering
    */
-  getAllItemsSorted = $derived.by((): TimelineItem[] => {
-    const items: TimelineItem[] = [];
-
-    // Collect cards (rendered objects with position)
-    for (const obj of this.renderedObjects) {
-      // Cards get their position or a fallback based on index
-      const idx = this.renderedObjects.indexOf(obj);
-      const position = obj.position ?? (idx + 1) * POSITION_SPACING;
-      items.push({ type: 'card', item: obj, position });
-    }
-
-    // Collect milestones
-    for (const milestone of milestones.all) {
-      items.push({ type: 'milestone', item: milestone, position: milestone.position });
-    }
-
-    // Collect mutations with display='between' and a position
-    for (const placement of this.allPlacements) {
-      if (
-        placement.type === 'mutation' &&
-        placement.mutationDisplay === 'between' &&
-        placement.position !== undefined
-      ) {
-        items.push({ type: 'mutation', item: placement, position: placement.position });
-      }
-    }
-
-    // Sort by position
-    return items.sort((a, b) => a.position - b.position);
+  orderedTimeslots = $derived.by((): TimeslotContents[] => {
+    return this.timeslotOrder.map((tsId, index) => ({
+      timeslotId: tsId,
+      index,
+      cards: this.cardsByTimeslot.get(tsId) ?? [],
+      mutations: this.mutationsByTimeslot.get(tsId) ?? [],
+      milestonesBefore: this.milestonesByTimeslot.get(tsId) ?? [],
+    }));
   });
 
   /**
-   * Cards for the timeline - rendered objects with their placements and attached mutations
+   * Milestones at the very start (before first timeslot)
+   */
+  milestonesAtStart = $derived(this.milestonesByTimeslot.get(null) ?? []);
+
+  /**
+   * Cards for the timeline - with their placements and attached mutations
    */
   cards = $derived.by(() => {
     const cardList: TimelineCard[] = [];
+    let index = 0;
 
-    for (let i = 0; i < this.renderedObjects.length; i++) {
-      const obj = this.renderedObjects[i];
+    for (const tsId of this.timeslotOrder) {
+      const cardsInSlot = this.cardsByTimeslot.get(tsId) ?? [];
 
-      // Find creation placement for this object
-      const placement = this.allPlacements.find(
-        (p) => p.objectId === obj.id && p.type === 'creation'
-      ) ?? null;
+      for (const obj of cardsInSlot) {
+        // Find creation placement for this object
+        const placement = this.allPlacements.find(
+          (p) => p.objectId === obj.id && p.type === 'creation'
+        ) ?? null;
 
-      // Find mutations attached below this card
-      const mutationsBelow = this.allPlacements.filter(
-        (p) =>
-          p.type === 'mutation' &&
-          p.mutationDisplay === 'below' &&
-          p.attachedToObjectId === obj.id
-      );
+        // Find mutations attached below this card
+        const mutationsBelow = this.mutationsByAttachment.get(obj.id) ?? [];
 
-      cardList.push({
-        index: i,
-        object: obj,
-        placement,
-        mutationsBelow,
-      });
+        cardList.push({
+          index: index++,
+          object: obj,
+          placement,
+          mutationsBelow,
+        });
+      }
     }
 
     return cardList;
-  });
-
-  /**
-   * Mutations that appear between cards (in the flow)
-   * Sorted by position
-   */
-  mutationsBetween = $derived.by(() => {
-    return this.allPlacements
-      .filter(
-        (p) =>
-          p.type === 'mutation' &&
-          p.mutationDisplay === 'between' &&
-          p.position !== undefined
-      )
-      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-  });
-
-  /**
-   * All mutations organized by the object they're attached to (for 'below' display)
-   */
-  mutationsByAttachment = $derived.by(() => {
-    const byObject = new Map<string, TimelinePlacement[]>();
-    for (const p of this.allPlacements) {
-      if (p.type === 'mutation' && p.mutationDisplay === 'below' && p.attachedToObjectId) {
-        const list = byObject.get(p.attachedToObjectId) ?? [];
-        list.push(p);
-        byObject.set(p.attachedToObjectId, list);
-      }
-    }
-    return byObject;
   });
 
   /**
@@ -246,6 +226,11 @@ class TimelineStore {
    * Total number of cards (rendered objects)
    */
   cardCount = $derived(this.renderedObjects.length);
+
+  /**
+   * Current timeslot ID at cursor
+   */
+  currentTimeslotId = $derived(this.timeslotOrder[this.cursorIndex] ?? null);
 
   // Legacy derived (kept for marker support)
   markers = $derived(this.current.markers);
@@ -283,63 +268,90 @@ class TimelineStore {
     return this.cards[index];
   }
 
+  /**
+   * Get timeslot index for a given timeslot ID
+   */
+  getTimeslotIndex(timeslotId: string): number {
+    return this.timeslotOrder.indexOf(timeslotId);
+  }
+
+  /**
+   * Get timeslot ID for a given index
+   */
+  getTimeslotIdAt(index: number): string | undefined {
+    return this.timeslotOrder[index];
+  }
+
   // ============================================================================
-  // Position Helpers
+  // Timeslot Operations
   // ============================================================================
 
   /**
-   * Calculate a position between two values (midpoint)
-   * Used for inserting items between existing items
+   * Create a new timeslot and add it to the end of the timeline
    */
-  getPositionBetween(before: number | null, after: number | null): number {
-    if (before === null && after === null) return POSITION_SPACING;
-    if (before === null) return after! - POSITION_SPACING;
-    if (after === null) return before + POSITION_SPACING;
-    return (before + after) / 2;
+  createTimeslotAtEnd(): string {
+    const ts = createTimeslot();
+    this.timeslots.set(ts.id, ts);
+    this.timeslotOrder = [...this.timeslotOrder, ts.id];
+    return ts.id;
   }
 
   /**
-   * Get the position for a card by its object ID
+   * Create a new timeslot and insert it after a specific index
+   * Returns the new timeslot ID
    */
-  getCardPosition(objectId: string): number | undefined {
-    const obj = objects.get(objectId);
-    if (!obj) return undefined;
-    if (obj.position !== undefined) return obj.position;
-    // Fallback to index-based position
-    const idx = this.getCardIndex(objectId);
-    return idx >= 0 ? (idx + 1) * POSITION_SPACING : undefined;
+  createTimeslotAfter(afterIndex: number): string {
+    const ts = createTimeslot();
+    this.timeslots.set(ts.id, ts);
+
+    const newOrder = [...this.timeslotOrder];
+    newOrder.splice(afterIndex + 1, 0, ts.id);
+    this.timeslotOrder = newOrder;
+
+    return ts.id;
   }
 
   /**
-   * Get the effective position for an item at a given index
-   * Used when items don't have explicit positions yet
+   * Create a new timeslot and insert it before a specific index
+   * Returns the new timeslot ID
    */
-  getPositionForIndex(index: number): number {
-    const obj = this.renderedObjects[index];
-    if (obj?.position !== undefined) return obj.position;
-    return (index + 1) * POSITION_SPACING;
+  createTimeslotBefore(beforeIndex: number): string {
+    const ts = createTimeslot();
+    this.timeslots.set(ts.id, ts);
+
+    const newOrder = [...this.timeslotOrder];
+    newOrder.splice(beforeIndex, 0, ts.id);
+    this.timeslotOrder = newOrder;
+
+    return ts.id;
   }
 
   /**
-   * Rebalance all positions to ensure clean spacing
-   * Called when positions get too close (gap < 1)
+   * Remove a timeslot if it's empty (no cards, no mutations)
    */
-  rebalancePositions(): Map<string, number> {
-    const newPositions = new Map<string, number>();
-    const items = this.getAllItemsSorted;
+  removeTimeslotIfEmpty(timeslotId: string): boolean {
+    const cards = this.cardsByTimeslot.get(timeslotId);
+    const mutations = this.mutationsByTimeslot.get(timeslotId);
 
-    items.forEach((item, idx) => {
-      const newPos = (idx + 1) * POSITION_SPACING;
-      if (item.type === 'card') {
-        newPositions.set(item.item.id, newPos);
-      } else if (item.type === 'milestone') {
-        newPositions.set(item.item.id, newPos);
-      } else if (item.type === 'mutation') {
-        newPositions.set(item.item.id, newPos);
-      }
-    });
+    if ((cards?.length ?? 0) === 0 && (mutations?.length ?? 0) === 0) {
+      this.timeslots.delete(timeslotId);
+      this.timeslotOrder = this.timeslotOrder.filter(id => id !== timeslotId);
+      return true;
+    }
+    return false;
+  }
 
-    return newPositions;
+  /**
+   * Move a timeslot to a new position
+   */
+  moveTimeslot(timeslotId: string, toIndex: number): void {
+    const fromIndex = this.timeslotOrder.indexOf(timeslotId);
+    if (fromIndex === -1 || fromIndex === toIndex) return;
+
+    const newOrder = [...this.timeslotOrder];
+    newOrder.splice(fromIndex, 1);
+    newOrder.splice(toIndex, 0, timeslotId);
+    this.timeslotOrder = newOrder;
   }
 
   // ============================================================================
@@ -347,7 +359,7 @@ class TimelineStore {
   // ============================================================================
 
   addPlacement(placement: TimelinePlacement): TimelinePlacement {
-    this.allPlacements.push(placement);
+    this.allPlacements = [...this.allPlacements, placement];
     return placement;
   }
 
@@ -355,8 +367,6 @@ class TimelineStore {
     id: string,
     updates: Partial<Omit<TimelinePlacement, 'id' | 'createdAt'>>
   ): void {
-    // Use map + reassignment to ensure Svelte 5 reactivity triggers
-    // Index assignment can sometimes not propagate to derived values
     this.allPlacements = this.allPlacements.map((p) =>
       p.id === id
         ? { ...p, ...updates, updatedAt: new Date().toISOString() }
@@ -385,104 +395,88 @@ class TimelineStore {
   }
 
   // ============================================================================
-  // v2 Card/Mutation Convenience Methods
+  // Card/Mutation Convenience Methods (v3 - timeslot-based)
   // ============================================================================
 
   /**
-   * Add a creation placement for an object (v2)
-   * The object's position in the timeline is determined by its rendered status and tree order
+   * Add a creation placement for an object
+   * Creates a new timeslot for it if none specified
    */
-  addCreationV2(objectId: string): TimelinePlacement {
-    const placement = createPlacement(objectId, 'creation', {});
+  addCreation(objectId: string, timeslotId?: string): TimelinePlacement {
+    const tsId = timeslotId ?? this.createTimeslotAtEnd();
+
+    // Update the object's timeslotId
+    objects.update(objectId, { timeslotId: tsId });
+
+    const placement = createPlacement(objectId, 'creation', tsId);
     return this.addPlacement(placement);
   }
 
   /**
-   * Add a mutation that appears between cards (v2 - position-based)
-   * Supports both attribute changes and content changes
+   * Add a mutation to a specific timeslot
    */
-  addMutationBetween(
+  addMutation(
     objectId: string,
-    position: number,
+    timeslotId: string,
     label: string,
     changes: Record<string, { from: unknown; to: unknown }>,
-    threadIds?: string[],
-    contentChange?: { from: JSONContent | null; to: JSONContent | null },
-    sectionChanges?: Record<string, { from: JSONContent | null; to: JSONContent | null }>
+    options?: {
+      attachedToCardId?: string;
+      threadIds?: string[];
+      contentChange?: { from: JSONContent | null; to: JSONContent | null };
+      sectionChanges?: Record<string, { from: JSONContent | null; to: JSONContent | null }>;
+    }
   ): TimelinePlacement {
-    const placement = createPlacement(objectId, 'mutation', {
-      mutationDisplay: 'between',
-      position,
-      mutation: { label, changes, contentChange, sectionChanges },
-      threadIds,
+    const placement = createPlacement(objectId, 'mutation', timeslotId, {
+      attachedToCardId: options?.attachedToCardId,
+      threadIds: options?.threadIds,
+      mutation: {
+        label,
+        changes,
+        contentChange: options?.contentChange,
+        sectionChanges: options?.sectionChanges,
+      },
     });
     return this.addPlacement(placement);
   }
 
   /**
-   * Add a mutation that appears below a card (v2)
-   * Supports both attribute changes and content changes
+   * Add a mutation in a new timeslot after the current cursor
    */
-  addMutationBelow(
+  addMutationAfterCursor(
     objectId: string,
-    attachedToObjectId: string,
+    label: string,
+    changes: Record<string, { from: unknown; to: unknown }>,
+    options?: {
+      attachedToCardId?: string;
+      threadIds?: string[];
+      contentChange?: { from: JSONContent | null; to: JSONContent | null };
+    }
+  ): TimelinePlacement {
+    const tsId = this.createTimeslotAfter(this.cursorIndex);
+    return this.addMutation(objectId, tsId, label, changes, options);
+  }
+
+  /**
+   * Add a mutation to the same timeslot as a specific card
+   */
+  addMutationAtCard(
+    objectId: string,
+    cardObjectId: string,
     label: string,
     changes: Record<string, { from: unknown; to: unknown }>,
     threadIds?: string[],
-    contentChange?: { from: JSONContent | null; to: JSONContent | null },
-    sectionChanges?: Record<string, { from: JSONContent | null; to: JSONContent | null }>
+    contentChange?: { from: JSONContent | null; to: JSONContent | null }
   ): TimelinePlacement {
-    const placement = createPlacement(objectId, 'mutation', {
-      mutationDisplay: 'below',
-      attachedToObjectId,
-      mutation: { label, changes, contentChange, sectionChanges },
+    const cardObj = objects.get(cardObjectId);
+    if (!cardObj?.timeslotId) {
+      throw new Error(`Card ${cardObjectId} has no timeslot`);
+    }
+
+    return this.addMutation(objectId, cardObj.timeslotId, label, changes, {
+      attachedToCardId: cardObjectId,
       threadIds,
-    });
-    return this.addPlacement(placement);
-  }
-
-  /**
-   * Add a content-only mutation between cards
-   * Convenience method for mutations that only change content (no attributes)
-   */
-  addContentMutationBetween(
-    objectId: string,
-    position: number,
-    label: string,
-    contentChange: { from: JSONContent | null; to: JSONContent | null },
-    threadIds?: string[]
-  ): TimelinePlacement {
-    return this.addMutationBetween(objectId, position, label, {}, threadIds, contentChange);
-  }
-
-  /**
-   * Add a content-only mutation below a card
-   * Convenience method for mutations that only change content (no attributes)
-   */
-  addContentMutationBelow(
-    objectId: string,
-    attachedToObjectId: string,
-    label: string,
-    contentChange: { from: JSONContent | null; to: JSONContent | null },
-    threadIds?: string[]
-  ): TimelinePlacement {
-    return this.addMutationBelow(objectId, attachedToObjectId, label, {}, threadIds, contentChange);
-  }
-
-  /**
-   * Add a section-specific content mutation between cards
-   * For objects with multiple sections, mutate a specific section's content
-   */
-  addSectionMutationBetween(
-    objectId: string,
-    position: number,
-    label: string,
-    sectionId: string,
-    contentChange: { from: JSONContent | null; to: JSONContent | null },
-    threadIds?: string[]
-  ): TimelinePlacement {
-    return this.addMutationBetween(objectId, position, label, {}, threadIds, undefined, {
-      [sectionId]: contentChange,
+      contentChange,
     });
   }
 
@@ -525,119 +519,12 @@ class TimelineStore {
     });
   }
 
-  /**
-   * Get the effective content for an object at a specific position
-   * Useful for previewing content at any timeline position
-   */
-  getContentAtPosition(objectId: string, position: number): JSONContent | null {
-    const obj = objects.get(objectId);
-    if (!obj) return null;
-
-    // Start with base content
-    let content: JSONContent | null = obj.content;
-
-    // Get all content mutations before this position, sorted by position
-    const contentMutations = this.getPlacementsForObject(objectId)
-      .filter((p) => {
-        if (p.type !== 'mutation') return false;
-        if (!p.mutation?.contentChange) return false;
-        const mutPos = p.position ?? 0;
-        return mutPos < position;
-      })
-      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-
-    // Apply mutations in order
-    for (const mutation of contentMutations) {
-      if (mutation.mutation?.contentChange) {
-        content = mutation.mutation.contentChange.to;
-      }
-    }
-
-    return content;
-  }
-
-  /**
-   * Get content history for an object (all content mutations)
-   * Returns array of { position, content, label } sorted by position
-   */
-  getContentHistory(objectId: string): Array<{
-    position: number;
-    content: JSONContent | null;
-    label: string;
-    placementId: string;
-  }> {
-    const obj = objects.get(objectId);
-    const history: Array<{
-      position: number;
-      content: JSONContent | null;
-      label: string;
-      placementId: string;
-    }> = [];
-
-    // Add base content as position 0
-    if (obj) {
-      history.push({
-        position: 0,
-        content: obj.content,
-        label: 'Initial',
-        placementId: '',
-      });
-    }
-
-    // Add all content mutations
-    const contentMutations = this.getPlacementsForObject(objectId)
-      .filter((p) => p.type === 'mutation' && p.mutation?.contentChange)
-      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-
-    for (const mutation of contentMutations) {
-      if (mutation.mutation?.contentChange) {
-        history.push({
-          position: mutation.position ?? 0,
-          content: mutation.mutation.contentChange.to,
-          label: mutation.mutation.label,
-          placementId: mutation.id,
-        });
-      }
-    }
-
-    return history;
-  }
-
-  /**
-   * Change a mutation's display mode
-   */
-  setMutationDisplay(
-    placementId: string,
-    display: MutationDisplay,
-    options?: {
-      attachedToObjectId?: string;
-      position?: number;
-    }
-  ): void {
-    this.updatePlacement(placementId, {
-      mutationDisplay: display,
-      attachedToObjectId: display === 'below' ? options?.attachedToObjectId : undefined,
-      position: display === 'between' ? options?.position : undefined,
-    });
-  }
-
-  /**
-   * Get mutations between two positions
-   */
-  getMutationsBetweenPositions(startPosition: number, endPosition: number): TimelinePlacement[] {
-    return this.mutationsBetween.filter((p) => {
-      const pos = p.position ?? -1;
-      return pos >= startPosition && pos < endPosition;
-    });
-  }
-
   // ============================================================================
-  // Marker Operations
+  // Marker Operations (legacy support)
   // ============================================================================
 
   addMarker(marker: TimelineMarker): void {
     this.current.markers.push(marker);
-    this.current.markers.sort((a, b) => a.position - b.position);
   }
 
   removeMarker(id: string): void {
@@ -646,11 +533,6 @@ class TimelineStore {
 
   getMarker(id: string): TimelineMarker | undefined {
     return this.current.markers.find((m) => m.id === id);
-  }
-
-  getMarkerByName(name: string): TimelineMarker | undefined {
-    const lower = name.toLowerCase();
-    return this.current.markers.find((m) => m.name?.toLowerCase() === lower);
   }
 
   // ============================================================================
@@ -662,37 +544,41 @@ class TimelineStore {
   }
 
   // ============================================================================
-  // Cursor Operations (v2 - index-based)
+  // Cursor Operations (index-based into timeslots)
   // ============================================================================
 
   /**
-   * Set cursor to a specific card index
+   * Set cursor to a specific index
    */
   setCursorIndex(index: number): void {
-    this.cursorIndex = Math.max(0, Math.min(index, this.cardCount - 1));
+    const max = Math.max(0, this.timeslotOrder.length - 1);
+    this.cursorIndex = Math.max(0, Math.min(index, max));
   }
 
   /**
-   * Move cursor to the card for a specific object
+   * Move cursor to the timeslot containing a specific object
    */
   moveCursorToObject(objectId: string): void {
-    const index = this.getCardIndex(objectId);
-    if (index >= 0) {
-      this.setCursorIndex(index);
+    const obj = objects.get(objectId);
+    if (obj?.timeslotId) {
+      const index = this.getTimeslotIndex(obj.timeslotId);
+      if (index >= 0) {
+        this.setCursorIndex(index);
+      }
     }
   }
 
   /**
-   * Move cursor forward by one card
+   * Move cursor forward by one timeslot
    */
   cursorNext(): void {
-    if (this.cursorIndex < this.cardCount - 1) {
+    if (this.cursorIndex < this.timeslotOrder.length - 1) {
       this.cursorIndex++;
     }
   }
 
   /**
-   * Move cursor backward by one card
+   * Move cursor backward by one timeslot
    */
   cursorPrev(): void {
     if (this.cursorIndex > 0) {
@@ -701,56 +587,126 @@ class TimelineStore {
   }
 
   /**
-   * Move cursor to the first card
+   * Move cursor to the first timeslot
    */
   cursorFirst(): void {
     this.cursorIndex = 0;
   }
 
   /**
-   * Move cursor to the last card
+   * Move cursor to the last timeslot
    */
   cursorLast(): void {
-    this.cursorIndex = Math.max(0, this.cardCount - 1);
+    this.cursorIndex = Math.max(0, this.timeslotOrder.length - 1);
+  }
+
+  // ============================================================================
+  // Anchor Operations
+  // ============================================================================
+
+  /**
+   * Check if there's an active anchor (we navigated away from a position)
+   */
+  get hasAnchor(): boolean {
+    return this.anchorIndex !== null;
+  }
+
+  /**
+   * Get the anchored timeslot ID
+   */
+  get anchoredTimeslotId(): string | null {
+    if (this.anchorIndex === null) return null;
+    return this.timeslotOrder[this.anchorIndex] ?? null;
+  }
+
+  /**
+   * Set anchor to current cursor position before navigating away
+   */
+  setAnchor(): void {
+    this.anchorIndex = this.cursorIndex;
+  }
+
+  /**
+   * Return to anchor position and clear it
+   */
+  returnToAnchor(): void {
+    if (this.anchorIndex !== null) {
+      this.cursorIndex = this.anchorIndex;
+      this.anchorIndex = null;
+    }
+  }
+
+  /**
+   * Clear anchor without returning to it
+   */
+  clearAnchor(): void {
+    this.anchorIndex = null;
+  }
+
+  /**
+   * Navigate to a position with anchor support
+   */
+  navigateWithAnchor(targetIndex: number): void {
+    if (this.anchorIndex === null && this.cursorIndex !== targetIndex) {
+      this.setAnchor();
+    }
+    this.cursorIndex = targetIndex;
+  }
+
+  // ============================================================================
+  // Object State Computation (the core of the timeslot model!)
+  // ============================================================================
+
+  /**
+   * Get mutations for an object at or before a given timeslot index
+   * This is the key method that makes the timeslot model work correctly
+   */
+  getMutationsAtOrBefore(objectId: string, timeslotIndex: number): TimelinePlacement[] {
+    // Get the set of valid timeslot IDs (all timeslots up to and including the index)
+    const validTimeslots = new Set(this.timeslotOrder.slice(0, timeslotIndex + 1));
+
+    return this.allPlacements
+      .filter((p) =>
+        p.objectId === objectId &&
+        p.type === 'mutation' &&
+        validTimeslots.has(p.timeslotId)
+      )
+      .sort((a, b) => {
+        // Sort by timeslot order
+        const aIndex = this.getTimeslotIndex(a.timeslotId);
+        const bIndex = this.getTimeslotIndex(b.timeslotId);
+        return aIndex - bIndex;
+      });
+  }
+
+  /**
+   * Get mutations for an object after a given timeslot index
+   */
+  getMutationsAfter(objectId: string, timeslotIndex: number): TimelinePlacement[] {
+    const futureTimeslots = new Set(this.timeslotOrder.slice(timeslotIndex + 1));
+
+    return this.allPlacements
+      .filter((p) =>
+        p.objectId === objectId &&
+        p.type === 'mutation' &&
+        futureTimeslots.has(p.timeslotId)
+      )
+      .sort((a, b) => {
+        const aIndex = this.getTimeslotIndex(a.timeslotId);
+        const bIndex = this.getTimeslotIndex(b.timeslotId);
+        return aIndex - bIndex;
+      });
   }
 
   /**
    * Get the computed state of an object at the current cursor position
-   * In v2, this considers mutations up to and including the current cursor position
-   *
-   * This includes:
-   * - computedAttributes: attribute values after applying all mutations up to cursor
-   * - computedContent: content after applying all content mutations up to cursor
-   * - computedSections: section contents after applying all section mutations up to cursor
    */
   getObjectStateAtCursor(objectId: string): ComputedObjectState {
     const currentIndex = this.cursorIndex;
-    const currentPosition = this.getPositionForIndex(currentIndex);
-    const objectPlacements = this.getPlacementsForObject(objectId);
     const obj = objects.get(objectId);
 
-    // For v2 model: filter mutations based on their position relative to cursor
-    const relevantMutations = objectPlacements
-      .filter((p) => {
-        if (p.type !== 'mutation') return false;
-
-        // v2 model: check position or attachedToObjectId
-        if (p.position !== undefined) {
-          return p.position < currentPosition;
-        }
-        if (p.attachedToObjectId) {
-          const attachedPosition = this.getCardPosition(p.attachedToObjectId);
-          return attachedPosition !== undefined && attachedPosition <= currentPosition;
-        }
-
-        return false;
-      })
-      .sort((a, b) => {
-        // Sort by position
-        const aPos = a.position ?? 0;
-        const bPos = b.position ?? 0;
-        return aPos - bPos;
-      });
+    const relevantMutations = this.getMutationsAtOrBefore(objectId, currentIndex);
+    const futureMutations = this.getMutationsAfter(objectId, currentIndex);
 
     // Compute attributes by applying all mutations in order
     const computedAttributes: Record<string, unknown> = {};
@@ -763,7 +719,6 @@ class TimelineStore {
     }
 
     // Compute content by applying all content mutations in order
-    // Start with base object content
     let computedContent: JSONContent | null = obj?.content ?? null;
 
     // Initialize computed sections from base object sections
@@ -776,37 +731,15 @@ class TimelineStore {
 
     // Apply content mutations in order
     for (const mutation of relevantMutations) {
-      // Apply main content change if present
       if (mutation.mutation?.contentChange) {
         computedContent = mutation.mutation.contentChange.to;
       }
-      // Apply section-specific content changes if present
       if (mutation.mutation?.sectionChanges) {
         for (const [sectionId, change] of Object.entries(mutation.mutation.sectionChanges)) {
           computedSections[sectionId] = change.to;
         }
       }
     }
-
-    const futureMutations = objectPlacements
-      .filter((p) => {
-        if (p.type !== 'mutation') return false;
-
-        if (p.position !== undefined) {
-          return p.position >= currentPosition;
-        }
-        if (p.attachedToObjectId) {
-          const attachedPosition = this.getCardPosition(p.attachedToObjectId);
-          return attachedPosition !== undefined && attachedPosition > currentPosition;
-        }
-
-        return false;
-      })
-      .sort((a, b) => {
-        const aPos = a.position ?? 0;
-        const bPos = b.position ?? 0;
-        return aPos - bPos;
-      });
 
     return {
       objectId,
@@ -837,19 +770,21 @@ class TimelineStore {
   toggleRendered(objectId: string): void {
     const obj = objects.get(objectId);
     if (obj) {
-      objects.update(objectId, {
-        rendered: !obj.rendered,
-      });
+      if (obj.rendered) {
+        // Turning off - clear timeslotId
+        objects.update(objectId, { rendered: false, timeslotId: undefined });
+      } else {
+        // Turning on - create new timeslot at end
+        const tsId = this.createTimeslotAtEnd();
+        objects.update(objectId, { rendered: true, timeslotId: tsId });
+      }
     }
   }
 
   // ============================================================================
-  // Thread Operations (delegated to placements)
+  // Thread Operations
   // ============================================================================
 
-  /**
-   * Add a placement to a thread
-   */
   addPlacementToThread(placementId: string, threadId: string): void {
     const placement = this.getPlacement(placementId);
     if (placement) {
@@ -859,9 +794,6 @@ class TimelineStore {
     }
   }
 
-  /**
-   * Remove a placement from a thread
-   */
   removePlacementFromThread(placementId: string, threadId: string): void {
     const placement = this.getPlacement(placementId);
     if (placement) {
@@ -871,110 +803,44 @@ class TimelineStore {
     }
   }
 
-  /**
-   * Get all placements in a specific thread
-   */
   getPlacementsInThread(threadId: string): TimelinePlacement[] {
     return this.allPlacements.filter((p) => p.threadIds?.includes(threadId));
   }
 
-  /**
-   * Get threads for a specific placement
-   */
-  getThreadsForPlacement(placementId: string): string[] {
-    return this.getPlacement(placementId)?.threadIds ?? [];
-  }
-
-  /**
-   * Get rendered cards that have any placements in a thread
-   * Used for showing "In Thread" section in properties panel
-   */
   getCardsInThread(threadId: string): AethelObject[] {
     const placementsInThread = this.getPlacementsInThread(threadId);
     const objectIds = new Set<string>();
 
     for (const p of placementsInThread) {
-      // For 'below' mutations, include the card they're attached to
-      if (p.mutationDisplay === 'below' && p.attachedToObjectId) {
-        objectIds.add(p.attachedToObjectId);
+      if (p.attachedToCardId) {
+        objectIds.add(p.attachedToCardId);
       }
-      // Also include the object the placement belongs to
       objectIds.add(p.objectId);
     }
 
     return this.renderedObjects.filter((obj) => objectIds.has(obj.id));
   }
 
-  /**
-   * Get rendered cards that are NOT in a thread
-   * Used for showing "Available to Add" section in properties panel
-   */
   getCardsNotInThread(threadId: string): AethelObject[] {
     const inThreadIds = new Set(this.getCardsInThread(threadId).map((c) => c.id));
     return this.renderedObjects.filter((obj) => !inThreadIds.has(obj.id));
   }
 
   // ============================================================================
-  // Subthread Operations (for threads with sections)
+  // Subthread Operations
   // ============================================================================
 
-  /**
-   * Get placements in a specific subthread (section)
-   * Includes placements that target this specific subthread OR have no subthread targeting (full thread)
-   */
   getPlacementsInSubthread(threadId: string, sectionId: string): TimelinePlacement[] {
     return this.allPlacements.filter((p) => {
-      // Must be in the parent thread
       if (!p.threadIds?.includes(threadId)) return false;
-      // If no subthreadIds specified, this placement applies to all sections (full thread)
       if (!p.subthreadIds || p.subthreadIds.length === 0) return true;
-      // Otherwise, check if this section is specifically targeted
       return p.subthreadIds.includes(sectionId);
     });
   }
 
-  /**
-   * Get placements that target the full thread (no subthread targeting)
-   */
-  getPlacementsInFullThread(threadId: string): TimelinePlacement[] {
-    return this.allPlacements.filter((p) => {
-      if (!p.threadIds?.includes(threadId)) return false;
-      return !p.subthreadIds || p.subthreadIds.length === 0;
-    });
-  }
-
-  /**
-   * Get cards in a specific subthread
-   */
-  getCardsInSubthread(threadId: string, sectionId: string): AethelObject[] {
-    const placements = this.getPlacementsInSubthread(threadId, sectionId);
-    const objectIds = new Set<string>();
-
-    for (const p of placements) {
-      if (p.mutationDisplay === 'below' && p.attachedToObjectId) {
-        objectIds.add(p.attachedToObjectId);
-      }
-      objectIds.add(p.objectId);
-    }
-
-    return this.renderedObjects.filter((obj) => objectIds.has(obj.id));
-  }
-
-  /**
-   * Check if a placement targets specific subthreads
-   */
-  hasSubthreadTargeting(placementId: string): boolean {
-    const p = this.getPlacement(placementId);
-    return Boolean(p?.subthreadIds && p.subthreadIds.length > 0);
-  }
-
-  /**
-   * Add subthread targeting to a placement
-   */
   addSubthreadToPlacement(placementId: string, sectionId: string): void {
     const p = this.getPlacement(placementId);
     if (!p) return;
-
     const currentSubthreads = p.subthreadIds ?? [];
     if (!currentSubthreads.includes(sectionId)) {
       this.updatePlacement(placementId, {
@@ -983,24 +849,13 @@ class TimelineStore {
     }
   }
 
-  /**
-   * Remove subthread targeting from a placement
-   */
   removeSubthreadFromPlacement(placementId: string, sectionId: string): void {
     const p = this.getPlacement(placementId);
     if (!p?.subthreadIds) return;
-
     const newSubthreads = p.subthreadIds.filter((id) => id !== sectionId);
     this.updatePlacement(placementId, {
       subthreadIds: newSubthreads.length > 0 ? newSubthreads : undefined,
     });
-  }
-
-  /**
-   * Clear all subthread targeting (revert to full thread)
-   */
-  clearSubthreadTargeting(placementId: string): void {
-    this.updatePlacement(placementId, { subthreadIds: undefined });
   }
 
   // ============================================================================
@@ -1008,16 +863,20 @@ class TimelineStore {
   // ============================================================================
 
   /**
-   * Load timeline data (v2 format)
+   * Load timeline data (v3 format)
    */
-  loadV2(
+  load(
     timelineData: Timeline,
     newPlacements: TimelinePlacement[],
+    newTimeslotOrder: string[],
+    newTimeslots: Timeslot[],
     newCursorIndex: number = 0,
     newPanelHeight: number = 180
   ): void {
     this.current = timelineData;
     this.allPlacements = newPlacements;
+    this.timeslotOrder = newTimeslotOrder;
+    this.timeslots = new Map(newTimeslots.map(ts => [ts.id, ts]));
     this.cursorIndex = newCursorIndex;
     this.panelHeight = this._clampPanelHeight(newPanelHeight);
   }
@@ -1029,8 +888,11 @@ class TimelineStore {
       markers: [],
     };
     this.allPlacements = [];
+    this.timeslotOrder = [];
+    this.timeslots = new Map();
     this.cursorIndex = 0;
     this.panelHeight = 180;
+    this.anchorIndex = null;
   }
 }
 

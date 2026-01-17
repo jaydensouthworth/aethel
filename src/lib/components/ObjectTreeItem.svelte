@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { objects, ui, timeline } from '$lib/stores';
+  import { objects, ui, timeline, timelineEditor } from '$lib/stores';
   import { getObjectType, OBJECT_TYPES } from '$lib/types';
   import type { AethelObject } from '$lib/types';
   // Self-import for recursion (replaces deprecated svelte:self)
   import ObjectTreeItem from './ObjectTreeItem.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
+  import { editor } from '$lib/services/editor';
 
   interface Props {
     obj: AethelObject;
@@ -64,15 +65,12 @@
   });
 
   function handleClick() {
-    ui.select(obj.id);
-
-    // If object is rendered on timeline, move cursor to it
-    if (obj.rendered) {
-      const index = timeline.getCardIndex(obj.id);
-      if (index >= 0) {
-        timeline.setCursorIndex(index);
-      }
-    }
+    // Use the editor's object.select operation which handles:
+    // - Selecting the object in UI
+    // - Moving cursor to the object's card (if rendered)
+    // - Finding most recent mutation relative to anchor position
+    // - Setting up anchor for return navigation
+    editor.ops.object.select(obj.id);
   }
 
   function handleToggle(e: MouseEvent) {

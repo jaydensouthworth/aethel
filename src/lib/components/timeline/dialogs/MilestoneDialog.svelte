@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { milestones } from '$lib/stores';
+  import { milestones, timeline } from '$lib/stores';
 
   interface Props {
     open: boolean;
-    position: number;
+    timeslotIndex: number;
     milestoneId?: string | null;
     onClose: () => void;
   }
 
-  let { open, position, milestoneId = null, onClose }: Props = $props();
+  let { open, timeslotIndex, milestoneId = null, onClose }: Props = $props();
 
   let name = $state('');
   let description = $state('');
@@ -68,7 +68,9 @@
         ...options,
       });
     } else {
-      milestones.create(name.trim(), position, options);
+      // Get the timeslot ID at this index (milestone appears BEFORE this timeslot)
+      const beforeTimeslotId = timeline.getTimeslotIdAt(timeslotIndex) ?? null;
+      milestones.create(name.trim(), beforeTimeslotId, options);
     }
 
     onClose();
@@ -98,7 +100,7 @@
   <div class="backdrop" onclick={handleBackdropClick}>
     <div class="dialog" role="dialog" aria-modal="true">
       <h2 class="title">{isEditing ? 'Edit Milestone' : 'Add Milestone'}</h2>
-      <p class="subtitle">At position {Math.round(position)}</p>
+      <p class="subtitle">At slot {timeslotIndex + 1}</p>
 
       <form onsubmit={handleSubmit}>
         <div class="field">

@@ -4,11 +4,14 @@
 
   interface Props {
     open: boolean;
-    position: number;
+    timeslotIndex: number;
     onClose: () => void;
   }
 
-  let { open, position, onClose }: Props = $props();
+  let { open, timeslotIndex, onClose }: Props = $props();
+
+  // Get the timeslot ID at this index for creating mutations
+  const timeslotId = $derived(timeline.getTimeslotIdAt(timeslotIndex));
 
   let searchQuery = $state('');
   let selectedObjectId = $state<string | null>(null);
@@ -44,14 +47,14 @@
 
   function handleSubmit(e: Event) {
     e.preventDefault();
-    if (!selectedObjectId || !mutationLabel.trim()) return;
+    if (!selectedObjectId || !mutationLabel.trim() || !timeslotId) return;
 
-    timeline.addMutationBetween(
+    timeline.addMutation(
       selectedObjectId,
-      position,
+      timeslotId,
       mutationLabel.trim(),
       {}, // Empty changes for now
-      [] // No thread associations for now
+      { threadIds: [] } // No thread associations for now
     );
 
     onClose();
@@ -83,7 +86,7 @@
   <div class="backdrop" onclick={handleBackdropClick}>
     <div class="dialog" role="dialog" aria-modal="true">
       <h2 class="title">Add Mutation</h2>
-      <p class="subtitle">At position {Math.round(position)}</p>
+      <p class="subtitle">At slot {timeslotIndex + 1}</p>
 
       <form onsubmit={handleSubmit}>
         <!-- Object selection -->

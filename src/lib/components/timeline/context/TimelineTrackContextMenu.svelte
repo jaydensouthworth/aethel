@@ -1,6 +1,5 @@
 <script lang="ts">
   import { timeline, timelineEditor } from '$lib/stores';
-  import * as ops from '$lib/services/timeline-operations';
   import ContextMenu from '$lib/editor/context/ContextMenu.svelte';
   import ContextMenuItem from '$lib/editor/context/ContextMenuItem.svelte';
 
@@ -29,10 +28,7 @@
   }: Props = $props();
 
   // Derived state
-  const track = $derived(timeline.allTracks[trackIndex]);
-  const isTrackLocked = $derived(track ? timelineEditor.isTrackLocked(trackIndex) : false);
   const hasClipboard = $derived(timelineEditor.clipboard.length > 0);
-  const trackCount = $derived(timeline.allTracks.length);
 
   function handleClose() {
     onClose();
@@ -53,85 +49,10 @@
     handleClose();
   }
 
-  function handlePaste() {
-    if (!hasClipboard) return;
-    // Move cursor to position first
-    timeline.setCursorPosition(position);
-    ops.pasteAtCursor();
-    handleClose();
-  }
-
   function handleAddMarker() {
     if (onShowMarkerDialog) {
       onShowMarkerDialog(position);
-    } else {
-      // Default: add simple marker
-      timeline.addMarker({
-        id: crypto.randomUUID(),
-        position: position,
-        label: `Marker at ${position}`,
-        color: '#3b82f6',
-      });
     }
-    handleClose();
-  }
-
-  function handleJumpCursor() {
-    timeline.setCursorPosition(position);
-    handleClose();
-  }
-
-  function handleToggleTrackLock() {
-    timelineEditor.toggleTrackLock(trackIndex);
-    handleClose();
-  }
-
-  function handleRenameTrack() {
-    const newName = prompt('Enter track name:', track?.name || `Track ${trackIndex + 1}`);
-    if (newName !== null) {
-      timeline.updateTrack(trackIndex, { name: newName.trim() || undefined });
-    }
-    handleClose();
-  }
-
-  function handleSetTrackColor() {
-    // Simple color selection - could be enhanced with a color picker
-    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
-    const currentIndex = track?.color ? colors.indexOf(track.color) : -1;
-    const nextColor = colors[(currentIndex + 1) % colors.length];
-    timeline.updateTrack(trackIndex, { color: nextColor });
-    handleClose();
-  }
-
-  function handleAddTrackAbove() {
-    timeline.insertTrack(trackIndex, { locked: false });
-    handleClose();
-  }
-
-  function handleAddTrackBelow() {
-    timeline.insertTrack(trackIndex + 1, { locked: false });
-    handleClose();
-  }
-
-  function handleDeleteTrack() {
-    if (trackCount <= 1) return; // Don't delete the last track
-
-    const placementsOnTrack = timeline.allPlacements.filter(p => p.track === trackIndex);
-    if (placementsOnTrack.length > 0) {
-      const confirm = window.confirm(
-        `This track has ${placementsOnTrack.length} placement(s). Delete anyway?`
-      );
-      if (!confirm) return;
-    }
-
-    timeline.removeTrack(trackIndex);
-    handleClose();
-  }
-
-  function handleSelectAllOnTrack() {
-    const placementsOnTrack = timeline.allPlacements.filter(p => p.track === trackIndex);
-    timelineEditor.clearSelection();
-    placementsOnTrack.forEach(p => timelineEditor.select(p.id));
     handleClose();
   }
 
@@ -144,10 +65,7 @@
 <ContextMenu {open} {x} {y} onClose={handleClose}>
   <!-- Header -->
   <div class="menu-header">
-    <span class="track-label">Track {trackIndex + 1}</span>
-    {#if track?.name}
-      <span class="track-name">{track.name}</span>
-    {/if}
+    <span class="track-label">Timeline</span>
   </div>
 
   <div class="menu-divider"></div>
@@ -163,68 +81,12 @@
     Add mutation here
   </ContextMenuItem>
 
-  {#if hasClipboard}
-    <ContextMenuItem onclick={handlePaste}>
-      {#snippet icon()}📋{/snippet}
-      Paste here
-    </ContextMenuItem>
-  {/if}
-
   <div class="menu-divider"></div>
-
-  <!-- Navigation -->
-  <ContextMenuItem onclick={handleJumpCursor}>
-    {#snippet icon()}▶{/snippet}
-    Jump cursor here
-  </ContextMenuItem>
 
   <ContextMenuItem onclick={handleAddMarker}>
-    {#snippet icon()}🚩{/snippet}
-    Add marker here
+    {#snippet icon()}|{/snippet}
+    Add milestone here
   </ContextMenuItem>
-
-  <div class="menu-divider"></div>
-
-  <!-- Track management -->
-  <ContextMenuItem onclick={handleSelectAllOnTrack}>
-    {#snippet icon()}☐{/snippet}
-    Select all on track
-  </ContextMenuItem>
-
-  <ContextMenuItem onclick={handleToggleTrackLock}>
-    {#snippet icon()}{isTrackLocked ? '🔓' : '🔒'}{/snippet}
-    {isTrackLocked ? 'Unlock track' : 'Lock track'}
-  </ContextMenuItem>
-
-  <ContextMenuItem onclick={handleRenameTrack}>
-    {#snippet icon()}✎{/snippet}
-    Rename track
-  </ContextMenuItem>
-
-  <ContextMenuItem onclick={handleSetTrackColor}>
-    {#snippet icon()}🎨{/snippet}
-    Set track color
-  </ContextMenuItem>
-
-  <div class="menu-divider"></div>
-
-  <!-- Track structure -->
-  <ContextMenuItem onclick={handleAddTrackAbove}>
-    {#snippet icon()}↑{/snippet}
-    Add track above
-  </ContextMenuItem>
-
-  <ContextMenuItem onclick={handleAddTrackBelow}>
-    {#snippet icon()}↓{/snippet}
-    Add track below
-  </ContextMenuItem>
-
-  {#if trackCount > 1}
-    <ContextMenuItem danger onclick={handleDeleteTrack}>
-      {#snippet icon()}🗑{/snippet}
-      Delete track
-    </ContextMenuItem>
-  {/if}
 
   <div class="menu-divider"></div>
 
@@ -247,11 +109,6 @@
     font-weight: 600;
     font-size: var(--font-size-sm);
     color: var(--text-primary);
-  }
-
-  .track-name {
-    font-size: var(--font-size-xs);
-    color: var(--text-muted);
   }
 
   .menu-divider {

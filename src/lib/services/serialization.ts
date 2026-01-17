@@ -1,12 +1,12 @@
 /**
- * Serialization utilities for project save/load (v2 - single-track model)
+ * Serialization utilities for project save/load (v3 - timeslot-based model)
  *
  * Note: Uses dynamic imports to avoid circular dependency with stores
  */
 
 import type { AethelProject } from '$lib/types';
 
-const PROJECT_VERSION = '2.0.0';
+const PROJECT_VERSION = '3.0.0';
 
 /**
  * Serialize the current application state to an AethelProject object
@@ -26,13 +26,17 @@ export async function serializeProject(): Promise<AethelProject> {
     // Core data (includes thread objects with isThread=true)
     objects: objects.all,
 
-    // Timeline data (v2 format)
+    // Timeline data (v3 format - timeslot-based)
     timeline: {
       current: timeline.current,
       placements: timeline.allPlacements,
-      // v2: milestones (threads are now stored as objects with isThread=true)
+      // v3: Ordered list of timeslot IDs (source of truth for order)
+      timeslotOrder: timeline.timeslotOrder,
+      // v3: Timeslot entities
+      timeslots: Array.from(timeline.timeslots.values()),
+      // v3: milestones (reference timeslots by ID)
       milestones: milestones.all,
-      // v2: cursor index (not position)
+      // v3: cursor index (not position)
       cursorIndex: timeline.cursorIndex,
       panelHeight: timeline.panelHeight,
     },
@@ -76,10 +80,12 @@ export async function deserializeProject(project: AethelProject): Promise<void> 
     milestones.load(project.timeline.milestones);
   }
 
-  // Restore timeline (v2 format)
-  timeline.loadV2(
+  // Restore timeline (v3 format - timeslot-based)
+  timeline.load(
     project.timeline.current,
     project.timeline.placements,
+    project.timeline.timeslotOrder,
+    project.timeline.timeslots,
     project.timeline.cursorIndex ?? 0,
     project.timeline.panelHeight
   );
@@ -100,7 +106,7 @@ export async function deserializeProject(project: AethelProject): Promise<void> 
 }
 
 /**
- * Validate an AethelProject object structure (v2)
+ * Validate an AethelProject object structure (v3)
  */
 export function validateProject(data: unknown): data is AethelProject {
   if (!data || typeof data !== 'object') return false;
@@ -119,8 +125,10 @@ export function validateProject(data: unknown): data is AethelProject {
   if (!timeline.current || typeof timeline.current !== 'object') return false;
   if (!Array.isArray(timeline.placements)) return false;
   if (typeof timeline.panelHeight !== 'number') return false;
-  // v2: cursorIndex (cursorPosition is legacy)
-  if (typeof timeline.cursorIndex !== 'number' && typeof timeline.cursorPosition !== 'number') return false;
+  // v3: cursorIndex and timeslotOrder/timeslots required
+  if (typeof timeline.cursorIndex !== 'number') return false;
+  if (!Array.isArray(timeline.timeslotOrder)) return false;
+  if (!Array.isArray(timeline.timeslots)) return false;
 
   // Check ui structure
   const ui = project.ui as Record<string, unknown>;

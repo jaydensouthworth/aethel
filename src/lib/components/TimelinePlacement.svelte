@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TimelinePlacement as TPlacement } from '$lib/types';
   import { getObjectType } from '$lib/types';
-  import { objects, ui, timelineEditor } from '$lib/stores';
+  import { objects, ui, timelineEditor, timeline } from '$lib/stores';
 
   interface Props {
     placement: TPlacement;
@@ -60,8 +60,10 @@
     }
 
     // Start drag if using select tool and left button
+    // Note: In v3 model, position/track are not on placements - use timeslot index
     if (e.button === 0 && activeTool === 'select') {
-      timelineEditor.startDrag('move', placement.position, placement.track);
+      const timeslotIndex = timeline.getTimeslotIndex(placement.timeslotId);
+      timelineEditor.startDrag('move', timeslotIndex, 0);
     }
   }
 
@@ -79,8 +81,10 @@
     }
 
     // Start resize drag
+    // Note: In v3 model, position/track are not on placements - use timeslot index
     const dragType = edge === 'start' ? 'resize-start' : 'resize-end';
-    timelineEditor.startDrag(dragType, placement.position, placement.track);
+    const timeslotIndex = timeline.getTimeslotIndex(placement.timeslotId);
+    timelineEditor.startDrag(dragType, timeslotIndex, 0);
   }
 
   // Handle click for selection

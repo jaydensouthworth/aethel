@@ -669,16 +669,8 @@ class TimelineEditorStore {
     const gridStart = Math.floor(position / currentSnapGridSize) * currentSnapGridSize;
     snapPoints.push(gridStart, gridStart + currentSnapGridSize);
 
-    // Other placement edges
-    for (const p of timeline.allPlacements) {
-      if (currentSelectedIds.has(p.id)) continue;
-      if (p.position !== undefined) {
-        snapPoints.push(p.position);
-      }
-      if (p.endPosition !== undefined) {
-        snapPoints.push(p.endPosition);
-      }
-    }
+    // v3: In the timeslot model, snapping is index-based rather than position-based
+    // We don't snap to placement positions anymore, just grid points
 
     // Markers
     const markers = timeline.current.markers;
@@ -746,8 +738,7 @@ class TimelineEditorStore {
 
   isPlacementLocked(id: string): boolean {
     if (this.lockedPlacements.has(id)) return true;
-    const placement = timeline.getPlacement(id);
-    if (placement && placement.track !== undefined && this.lockedTracks.has(placement.track)) return true;
+    // v3: tracks are no longer used in the timeslot model
     return false;
   }
 

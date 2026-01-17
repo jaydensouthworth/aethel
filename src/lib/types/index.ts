@@ -130,14 +130,11 @@ export interface AethelObject {
   // Ordering within parent (tree panel)
   sortOrder?: number; // For manual ordering in tree (lower = earlier)
 
-  // Timeline position (unified linear model)
-  position?: number; // Position in timeline (all items sorted by this value)
+  // Timeline - which timeslot this object appears in (if rendered)
+  timeslotId?: string;
 
   // Book output
   rendered: boolean; // Include in book output?
-
-  // Timeline stacking
-  timelineSlot?: number; // Cards with same slot number are stacked (simultaneous events)
 
   // Content
   content: JSONContent | null; // TipTap JSON document (legacy single content)
@@ -160,20 +157,31 @@ export interface AethelObject {
 }
 
 // ============================================================================
-// Timeline
+// Timeline - Timeslot-Based Model
 // ============================================================================
 
 /**
+ * Timeslot - A unit of narrative time on the timeline.
+ * Everything in a timeslot happens "at the same time".
+ * Items reference timeslots by ID, timeslots are ordered via timeslotOrder array.
+ */
+export interface Timeslot {
+  id: string;
+  createdAt: string;
+}
+
+/**
  * Milestone - Section groupings for timeline organization (acts, parts, sections)
- * Appears between cards as visual dividers
+ * Appears between timeslots as visual dividers
  */
 export interface Milestone {
   id: string;
   name: string;
   color?: string;
   description?: string;
-  // Timeline position (unified linear model - all items sorted by this value)
-  position: number;
+  // Which timeslot this milestone appears BEFORE
+  // (null means at the very beginning, before all timeslots)
+  timeslotId: string | null;
   // Export metadata
   exportAs?: 'part' | 'act' | 'section' | 'book';
   exportTitle?: string;
@@ -182,28 +190,22 @@ export interface Milestone {
 }
 
 /**
- * MutationDisplay - How a mutation is displayed on the timeline
- * - 'between': appears as a marker in the flow between cards
- * - 'below': attached underneath a specific chapter card
- */
-export type MutationDisplay = 'between' | 'below';
-
-/**
  * TimelinePlacement - Represents an object's appearance on the timeline.
- * An object can have multiple placements (creations, mutations, ranges).
+ * An object can have multiple placements (creations, mutations).
  */
 export interface TimelinePlacement {
   id: string;
   objectId: string; // Reference to AethelObject
   type: 'creation' | 'mutation'; // What kind of placement
 
-  // === Unified position model ===
-  // For mutations with 'below' display: attach to this card
-  attachedToObjectId?: string;
-  // For mutations with 'between' display: timeline position (unified linear model)
-  position?: number;
-  // How this mutation is displayed (only for type: 'mutation')
-  mutationDisplay?: MutationDisplay;
+  // === Timeslot-based model ===
+  // Which timeslot this placement belongs to
+  timeslotId: string;
+
+  // Optional: For UI grouping - show this mutation under a specific card
+  // (only affects visual display, not timeline logic)
+  attachedToCardId?: string;
+
   // Thread associations (many-to-many)
   threadIds?: string[];
 
@@ -211,12 +213,6 @@ export interface TimelinePlacement {
   // undefined/empty = full thread (all sections)
   // specified = only these section IDs (subthreads)
   subthreadIds?: string[];
-
-  // === Legacy fields (kept for reference) ===
-  /** @deprecated Use position instead */
-  track?: number;
-  /** @deprecated Use position instead */
-  endPosition?: number;
 
   // For mutations only
   mutation?: {
@@ -236,8 +232,6 @@ export interface TimelinePlacement {
   // Editor state (persisted)
   locked?: boolean; // Prevent editing
   groupId?: string; // Group membership for batch operations
-  /** @deprecated No longer used in single-track model */
-  slipOffset?: number; // For slip tool - offset into content
 
   createdAt: string;
   updatedAt: string;
@@ -294,27 +288,25 @@ export interface ProjectConfig {
  * Used for localStorage auto-save and file export/import
  */
 export interface AethelProject {
-  version: string; // "2.0.0" - for migration support
+  version: string; // "3.0.0" - timeslot-based model
   savedAt: string; // ISO timestamp
 
   // Core data
   objects: AethelObject[];
 
-  // Timeline data (v2 - single-track model)
+  // Timeline data (v3 - timeslot-based model)
   timeline: {
     current: Timeline;
     placements: TimelinePlacement[];
-    // v2: Milestones for section groupings
+    // v3: Ordered list of timeslot IDs (the source of truth for order)
+    timeslotOrder: string[];
+    // v3: Timeslot entities (minimal - just for ID stability)
+    timeslots: Timeslot[];
+    // v3: Milestones for section groupings
     milestones?: Milestone[];
-    // v2: Cursor indexes into rendered objects (not absolute position)
+    // Cursor indexes into timeslotOrder
     cursorIndex: number;
     panelHeight: number;
-
-    // Legacy v1 fields (kept for migration)
-    /** @deprecated Use cursorIndex instead */
-    cursorPosition?: number;
-    /** @deprecated Tracks removed in v2 single-track model */
-    tracks?: TimelineTrack[];
   };
 
   // UI state (persisted for continuity)
@@ -392,16 +384,26 @@ export function createSection(name: string, sortOrder: number = 0): ObjectSectio
 }
 
 /**
- * Create a new timeline placement (unified position model)
+ * Create a new timeslot
+ */
+export function createTimeslot(): Timeslot {
+  const now = new Date().toISOString();
+  return {
+    id: createObjectId(),
+    createdAt: now,
+  };
+}
+
+/**
+ * Create a new timeline placement (timeslot-based model)
  */
 export function createPlacement(
   objectId: string,
   type: 'creation' | 'mutation',
+  timeslotId: string,
   options?: {
-    // For mutations: display mode
-    mutationDisplay?: MutationDisplay;
-    attachedToObjectId?: string; // For 'below' display
-    position?: number; // For 'between' display - unified timeline position
+    // For UI grouping - show mutation under a specific card
+    attachedToCardId?: string;
     // Thread associations
     threadIds?: string[];
     // Subthread targeting (section IDs when thread has sections)
@@ -422,9 +424,8 @@ export function createPlacement(
     id: createObjectId(),
     objectId,
     type,
-    mutationDisplay: options?.mutationDisplay,
-    attachedToObjectId: options?.attachedToObjectId,
-    position: options?.position,
+    timeslotId,
+    attachedToCardId: options?.attachedToCardId,
     threadIds: options?.threadIds,
     subthreadIds: options?.subthreadIds,
     mutation: options?.mutation,
@@ -438,7 +439,7 @@ export function createPlacement(
  */
 export function createMilestone(
   name: string,
-  position: number,
+  beforeTimeslotId: string | null,
   options?: {
     color?: string;
     description?: string;
@@ -450,7 +451,7 @@ export function createMilestone(
   return {
     id: createObjectId(),
     name,
-    position,
+    timeslotId: beforeTimeslotId,
     color: options?.color,
     description: options?.description,
     exportAs: options?.exportAs,

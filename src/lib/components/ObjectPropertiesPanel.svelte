@@ -66,8 +66,9 @@
 	let newAlias = $state('');
 	let showMutationEditor = $state(false);
 	let newMutationLabel = $state('');
-	let mutationMode = $state<'between' | 'below'>('between');
+	let mutationMode = $state<'at-cursor' | 'at-position' | 'below-card'>('at-cursor');
 	let attachToCardId = $state<string | null>(null);
+	let targetTimeslotIndex = $state<number>(0);
 
 	// Start editing name
 	function handleEditName() {
@@ -116,39 +117,25 @@
 		}
 	}
 
-	// Jump to mutation position - moves cursor to see the RESULT of the mutation
-	// on the CURRENTLY SELECTED object (not navigating to a different object).
-	//
+	// Jump to mutation - moves cursor to the timeslot containing the mutation
 	// Also sets the active mutation so editing updates that mutation's content.
-	//
-	// Mutation filtering logic:
-	// - "between" mutations: `position < currentPosition` (strictly less than)
-	// - "below" mutations: `attachedPosition <= currentPosition` (less than or equal)
-	function handleJumpToMutation(mutationId: string, position: number | undefined, attachedToObjectId?: string) {
+	function handleJumpToMutation(mutationId: string, attachedToCardId?: string) {
 		// Set this as the active mutation - editing will now update THIS mutation's content
 		ui.setActiveMutation(mutationId);
 
-		if (attachedToObjectId) {
-			// For 'below' mutations, find a position where the mutation is applied
-			// The filter uses `<=` so being AT the attached card's position works
-			const attachedIndex = timeline.getCardIndex(attachedToObjectId);
+		// Get the mutation placement to find its timeslot
+		const placement = timeline.getPlacement(mutationId);
+		if (!placement) return;
+
+		// Find the index of the timeslot this mutation is in
+		const timeslotIndex = timeline.getTimeslotIndex(placement.timeslotId);
+		if (timeslotIndex >= 0) {
+			timeline.setCursorIndex(timeslotIndex);
+		} else if (attachedToCardId) {
+			// Fallback: try to find the card it's attached to
+			const attachedIndex = timeline.getCardIndex(attachedToCardId);
 			if (attachedIndex >= 0) {
 				timeline.setCursorIndex(attachedIndex);
-			}
-		} else if (position !== undefined) {
-			// For 'between' mutations, filter uses `<` (strictly less than)
-			// So we need to move cursor to a position GREATER than mutation position
-			const index = timeline.renderedObjects.findIndex(
-				(obj) => (obj.position ?? 0) > position
-			);
-			if (index >= 0) {
-				timeline.setCursorIndex(index);
-			} else {
-				// Mutation is after all cards - go to last card
-				const lastIndex = timeline.cardCount - 1;
-				if (lastIndex >= 0) {
-					timeline.setCursorIndex(lastIndex);
-				}
 			}
 		}
 	}
@@ -157,14 +144,32 @@
 	function handleAddMutation() {
 		if (!selectedObject || !newMutationLabel.trim()) return;
 
-		if (mutationMode === 'between') {
-			ops.addMutationBetweenV2(
+		if (mutationMode === 'at-cursor') {
+			// Use current cursor position
+			ops.addMutationAtCurrent(
 				selectedObject.id,
-				timeline.getPositionForIndex(timeline.cursorIndex),
 				newMutationLabel.trim(),
 				{}
 			);
-		} else if (attachToCardId) {
+		} else if (mutationMode === 'at-position') {
+			// Use specific timeslot position
+			const timeslotId = timeline.getTimeslotIdAt(targetTimeslotIndex);
+			if (timeslotId) {
+				ops.addMutation(
+					selectedObject.id,
+					timeslotId,
+					newMutationLabel.trim(),
+					{}
+				);
+			} else {
+				// Create a new timeslot at this position
+				ops.addMutationAtCurrent(
+					selectedObject.id,
+					newMutationLabel.trim(),
+					{}
+				);
+			}
+		} else if (mutationMode === 'below-card' && attachToCardId) {
 			ops.addMutationBelowV2(
 				selectedObject.id,
 				attachToCardId,
@@ -290,9 +295,10 @@
 		// Check if the card is in the thread via mutations attached to it
 		const creationPlacement = cardPlacements.find(p => p.type === 'creation');
 		if (creationPlacement) {
+			// In v3 model, check for mutations attached to this card
 			const isInThreadViaMutation = timeline.allPlacements.some(p =>
-				p.mutationDisplay === 'below' &&
-				p.attachedToObjectId === cardId &&
+				p.type === 'mutation' &&
+				p.attachedToCardId === cardId &&
 				p.threadIds?.includes(threadId)
 			);
 
@@ -351,7 +357,8 @@
 	function setCardToFullThread(cardId: string) {
 		const placementId = ensureDirectThreadMembership(cardId);
 		if (placementId) {
-			timeline.clearSubthreadTargeting(placementId);
+			// Clear subthread targeting by setting to undefined
+			timeline.updatePlacement(placementId, { subthreadIds: undefined });
 		}
 	}
 </script>
@@ -497,7 +504,7 @@
 							<span class="thread-color-label">Thread color:</span>
 							<ColorPicker
 								value={selectedObject.threadColor}
-								inheritedColor={effectiveColor}
+								inheritedColor={effectiveColor ?? undefined}
 								onSelect={handleThreadColorChange}
 							/>
 						</div>
@@ -668,21 +675,50 @@
 									<input
 										type="radio"
 										bind:group={mutationMode}
-										value="between"
+										value="at-cursor"
 									/>
-									<span>Between cards</span>
+									<span>At cursor</span>
 								</label>
 								<label class="mode-option">
 									<input
 										type="radio"
 										bind:group={mutationMode}
-										value="below"
+										value="at-position"
+									/>
+									<span>At position</span>
+								</label>
+								<label class="mode-option">
+									<input
+										type="radio"
+										bind:group={mutationMode}
+										value="below-card"
 									/>
 									<span>Below card</span>
 								</label>
 							</div>
 
-							{#if mutationMode === 'below'}
+							{#if mutationMode === 'at-cursor'}
+								<div class="position-hint">
+									At position {timeline.cursorIndex + 1}
+								</div>
+							{:else if mutationMode === 'at-position'}
+								<div class="position-selector">
+									<label>Position:</label>
+									<select bind:value={targetTimeslotIndex}>
+										{#each timeline.orderedTimeslots as ts, i (ts.timeslotId)}
+											<option value={i}>
+												{i + 1}
+												{#if ts.cards.length > 0}
+													- {ts.cards.map(c => c.name).join(', ')}
+												{/if}
+											</option>
+										{/each}
+										<option value={timeline.timeslotOrder.length}>
+											{timeline.timeslotOrder.length + 1} (new position)
+										</option>
+									</select>
+								</div>
+							{:else if mutationMode === 'below-card'}
 								<select
 									class="card-select"
 									bind:value={attachToCardId}
@@ -692,10 +728,6 @@
 										<option value={card.id}>{card.name}</option>
 									{/each}
 								</select>
-							{:else}
-								<div class="position-hint">
-									At position {timeline.getPositionForIndex(timeline.cursorIndex)}
-								</div>
 							{/if}
 
 							<input
@@ -710,7 +742,7 @@
 									class="btn-primary"
 									onclick={handleAddMutation}
 									disabled={!newMutationLabel.trim() ||
-										(mutationMode === 'below' && !attachToCardId)}
+										(mutationMode === 'below-card' && !attachToCardId)}
 								>
 									Add
 								</button>
@@ -750,13 +782,13 @@
 									<div
 										class="mutation-item applied"
 										class:active={ui.activeMutationId === mutation.id}
-										onclick={() => handleJumpToMutation(mutation.id, mutation.position, mutation.attachedToObjectId)}
+										onclick={() => handleJumpToMutation(mutation.id, mutation.attachedToCardId)}
 									>
 										<span class="mutation-position">
-											{#if mutation.mutationDisplay === 'below'}
+											{#if mutation.attachedToCardId}
 												↳
 											{:else}
-												@{mutation.position}
+												@{timeline.getTimeslotIndex(mutation.timeslotId) + 1}
 											{/if}
 										</span>
 										<span class="mutation-label">{mutation.mutation?.label}</span>
@@ -785,13 +817,13 @@
 									<div
 										class="mutation-item future"
 										class:active={ui.activeMutationId === mutation.id}
-										onclick={() => handleJumpToMutation(mutation.id, mutation.position, mutation.attachedToObjectId)}
+										onclick={() => handleJumpToMutation(mutation.id, mutation.attachedToCardId)}
 									>
 										<span class="mutation-position">
-											{#if mutation.mutationDisplay === 'below'}
+											{#if mutation.attachedToCardId}
 												↳
 											{:else}
-												@{mutation.position}
+												@{timeline.getTimeslotIndex(mutation.timeslotId) + 1}
 											{/if}
 										</span>
 										<span class="mutation-label">{mutation.mutation?.label}</span>
@@ -1422,6 +1454,27 @@
 	.position-hint {
 		font-size: var(--font-size-xs);
 		color: var(--text-muted);
+	}
+
+	.position-selector {
+		display: flex;
+		align-items: center;
+		gap: var(--space-sm);
+		font-size: var(--font-size-xs);
+	}
+
+	.position-selector label {
+		color: var(--text-secondary);
+	}
+
+	.position-selector select {
+		flex: 1;
+		padding: var(--space-xs) var(--space-sm);
+		font-size: var(--font-size-xs);
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-sm);
+		background-color: var(--surface-base);
+		color: var(--text-primary);
 	}
 
 	.mutation-label-input {

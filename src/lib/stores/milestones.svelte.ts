@@ -2,6 +2,10 @@
  * Milestone registry store
  * Manages timeline section groupings (acts, parts, sections, etc.)
  * Uses Svelte 5 Runes for reactivity
+ *
+ * Note: Milestones use timeslotId to indicate which timeslot they appear BEFORE.
+ * A null timeslotId means the milestone appears at the very beginning.
+ * Ordering is determined by the timeline's timeslotOrder.
  */
 
 import type { Milestone } from '$lib/types';
@@ -18,9 +22,9 @@ class MilestonesStore {
   // Derived State
   // ============================================================================
 
-  // All milestones as array, sorted by position
+  // All milestones as array (unsorted - ordering comes from timeline's timeslotOrder)
   all = $derived.by(() => {
-    return Object.values(this._milestonesById).sort((a, b) => a.position - b.position);
+    return Object.values(this._milestonesById);
   });
 
   // Get the raw map (for imperative access)
@@ -60,10 +64,12 @@ class MilestonesStore {
 
   /**
    * Create and add a new milestone
+   * @param name - The milestone name
+   * @param beforeTimeslotId - The timeslot this milestone appears BEFORE (null = at the start)
    */
   create(
     name: string,
-    position: number,
+    beforeTimeslotId: string | null,
     options?: {
       color?: string;
       description?: string;
@@ -71,36 +77,27 @@ class MilestonesStore {
       exportTitle?: string;
     }
   ): Milestone {
-    const milestone = createMilestoneFn(name, position, options);
+    const milestone = createMilestoneFn(name, beforeTimeslotId, options);
     this.add(milestone);
     return milestone;
   }
 
   // ============================================================================
-  // Position Operations
+  // Timeslot Operations
   // ============================================================================
 
   /**
-   * Move a milestone to a new position
+   * Move a milestone to appear before a different timeslot
    */
-  move(id: string, newPosition: number): void {
-    this.update(id, { position: newPosition });
+  moveToTimeslot(id: string, beforeTimeslotId: string | null): void {
+    this.update(id, { timeslotId: beforeTimeslotId });
   }
 
   /**
-   * Get the milestone at or before a given position
-   * Returns the most recent milestone before this position
+   * Get milestones that appear before a specific timeslot
    */
-  getMilestoneForPosition(position: number): Milestone | undefined {
-    let currentSection: Milestone | undefined;
-    for (const milestone of this.all) {
-      if (milestone.position < position) {
-        currentSection = milestone;
-      } else {
-        break;
-      }
-    }
-    return currentSection;
+  getMilestonesBeforeTimeslot(timeslotId: string | null): Milestone[] {
+    return this.all.filter((m) => m.timeslotId === timeslotId);
   }
 
   // ============================================================================

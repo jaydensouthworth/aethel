@@ -51,7 +51,10 @@
   }
 
   function handleDelete() {
-    ops.deleteSelectedPlacements();
+    // Delete all selected placements
+    const selectedIds = Array.from(timelineEditor.selectedPlacementIds);
+    selectedIds.forEach(id => ops.deletePlacement(id));
+    timelineEditor.clearSelection();
   }
 
   function handleDuplicate() {
