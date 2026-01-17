@@ -491,6 +491,17 @@
   let measuredSubthreads = $state<MeasuredSubthread[]>([]);
   let totalFlowWidth = $state(0);
 
+  // Cursor highlight position (measured from DOM)
+  interface CursorHighlight {
+    leftPx: number;
+    widthPx: number;
+    hasPosition: boolean;
+  }
+  let cursorHighlight = $state<CursorHighlight>({ leftPx: 0, widthPx: 0, hasPosition: false });
+
+  // Track inline mutation elements for highlighting
+  let inlineMutationEls = $state<Map<string, HTMLDivElement>>(new Map());
+
   function measureSpanFromSlotIds(slotIds: string[], containerRect: DOMRect, scrollLeft: number): { left: number; width: number; hasSpan: boolean } {
     if (slotIds.length === 0) {
       return { left: 0, width: 0, hasSpan: false };
@@ -510,6 +521,59 @@
       left: firstRect.left - containerRect.left + scrollLeft,
       width: lastRect.right - firstRect.left,
       hasSpan: true,
+    };
+  }
+
+  function measureCursorPosition() {
+    if (!flowContainerEl) {
+      cursorHighlight = { leftPx: 0, widthPx: 0, hasPosition: false };
+      return;
+    }
+
+    const containerRect = flowContainerEl.getBoundingClientRect();
+    const scrollLeft = flowContainerEl.scrollLeft;
+    const overhang = 8;
+
+    // Check if there's an active inline mutation to highlight
+    const activeMutId = ui.activeMutationId;
+    if (activeMutId) {
+      const inlineMutEl = inlineMutationEls.get(activeMutId);
+      if (inlineMutEl) {
+        const mutRect = inlineMutEl.getBoundingClientRect();
+        cursorHighlight = {
+          leftPx: mutRect.left - containerRect.left + scrollLeft - overhang,
+          widthPx: mutRect.width + overhang * 2,
+          hasPosition: true,
+        };
+        return;
+      }
+    }
+
+    // Fall back to card-based cursor
+    const currentCard = cards[cursorIndex];
+    if (!currentCard) {
+      cursorHighlight = { leftPx: 0, widthPx: 0, hasPosition: false };
+      return;
+    }
+
+    // Find which slot group contains the current card
+    const group = slotGroups.find(g => g.cards.some(c => c.object.id === currentCard.object.id));
+    if (!group) {
+      cursorHighlight = { leftPx: 0, widthPx: 0, hasPosition: false };
+      return;
+    }
+
+    const cardGroupEl = cardGroupEls.get(group.slotId);
+    if (!cardGroupEl) {
+      cursorHighlight = { leftPx: 0, widthPx: 0, hasPosition: false };
+      return;
+    }
+
+    const cardRect = cardGroupEl.getBoundingClientRect();
+    cursorHighlight = {
+      leftPx: cardRect.left - containerRect.left + scrollLeft - overhang,
+      widthPx: cardRect.width + overhang * 2,
+      hasPosition: true,
     };
   }
 
@@ -549,6 +613,9 @@
 
     measuredThreads = threads;
     measuredSubthreads = subthreads;
+
+    // Also measure cursor position
+    measureCursorPosition();
   }
 
   // Recalculate thread positions when layout changes
@@ -562,6 +629,10 @@
       (acc, t) => acc + t.subthreads.reduce((a, s) => a + s.slotIds.length, 0),
       0
     );
+    // Track cursor changes
+    const _cursorIdx = cursorIndex;
+    // Track active mutation changes (for inline mutation highlighting)
+    const _activeMut = ui.activeMutationId;
     // Delay to allow DOM update
     requestAnimationFrame(() => measureThreadPositions());
   });
@@ -587,6 +658,21 @@
     return {
       destroy() {
         cardGroupEls.delete(slotId);
+      }
+    };
+  }
+
+  // Svelte action to register inline mutation elements for highlighting
+  function registerInlineMutation(node: HTMLDivElement, mutationId: string) {
+    inlineMutationEls.set(mutationId, node);
+    // Trigger measurement after registration if this is the active mutation
+    if (ui.activeMutationId === mutationId) {
+      requestAnimationFrame(() => measureCursorPosition());
+    }
+
+    return {
+      destroy() {
+        inlineMutationEls.delete(mutationId);
       }
     };
   }
@@ -676,6 +762,30 @@
     ui.select(objectId);
   }
 
+  function handleMutationClick(e: MouseEvent, mutation: TimelinePlacement, cardIndex?: number, isInline?: boolean) {
+    e.stopPropagation();
+    // Select the object this mutation belongs to
+    ui.select(mutation.objectId);
+    // Set this mutation as the active mutation for editing
+    ui.setActiveMutation(mutation.id);
+
+    // For inline mutations (between cards), don't move the card cursor
+    // The highlight will be positioned on the mutation element itself
+    if (isInline) {
+      // Just trigger a remeasure so the highlight updates
+      requestAnimationFrame(() => measureCursorPosition());
+      return;
+    }
+
+    // Move cursor to the card this mutation is attached to
+    if (cardIndex !== undefined) {
+      timeline.setCursorIndex(cardIndex);
+    } else if (mutation.attachedToObjectId) {
+      const idx = timeline.getCardIndex(mutation.attachedToObjectId);
+      if (idx >= 0) timeline.setCursorIndex(idx);
+    }
+  }
+
   let expandedConnectorKey = $state<string | null>(null);
 
   function handleConnectorClick(e: MouseEvent, connectorKey: string) {
@@ -721,6 +831,7 @@
   }
 
   let scrollContainer: HTMLDivElement | undefined = $state();
+  let scrollLeft = $state(0);
 
   $effect(() => {
     if (scrollContainer && cursorIndex >= 0 && !collapsed) {
@@ -938,10 +1049,10 @@
   onclick={handleTimelineClick}
 >
   {#if collapsed}
-    <div class="collapsed-bar">
-      <span class="collapsed-title">Timeline</span>
+    <button class="collapsed-bar" onclick={() => ui.toggleTimeline()}>
+      <span class="collapsed-title">▶ Timeline</span>
       <span class="collapsed-pos">{cursorIndex + 1} / {cardCount}</span>
-    </div>
+    </button>
   {:else if cardCount === 0}
     <div class="empty">
       <p class="empty-title">No chapters on the timeline</p>
@@ -951,8 +1062,17 @@
     <!-- Timeline header with undo/redo -->
     <TimelineHeader />
 
+    <!-- Cursor highlight - positioned relative to timeline, scrolls with content -->
+    {#if cursorHighlight.hasPosition}
+      <div
+        class="cursor-highlight"
+        style:left="{cursorHighlight.leftPx - scrollLeft}px"
+        style:width="{cursorHighlight.widthPx}px"
+      ></div>
+    {/if}
+
     <!-- Main scroll area - contains flow and thread rows -->
-    <div class="timeline-scroll" bind:this={scrollContainer}>
+    <div class="timeline-scroll" bind:this={scrollContainer} onscroll={() => { scrollLeft = scrollContainer?.scrollLeft ?? 0; }}>
       <div class="timeline-content" bind:this={flowContainerEl}>
         <div class="timeline-flow">
           <!-- Spine - behind all items -->
@@ -1062,6 +1182,8 @@
                         {#each card.mutationsBelow as mutation (mutation.id)}
                           {@const mutObj = objects.get(mutation.objectId)}
                           {@const mutColor = mutObj ? objects.getEffectiveColor(mutObj.id) : '#888'}
+                          <!-- svelte-ignore a11y_click_events_have_key_events -->
+                          <!-- svelte-ignore a11y_no_static_element_interactions -->
                           <div
                             class="mut-chip"
                             class:dragging={draggedId === mutation.id && dragType === 'mutation'}
@@ -1069,9 +1191,10 @@
                             draggable="true"
                             ondragstart={(e) => handleMutationDragStart(e, mutation.id)}
                             ondragend={handleMutationDragEnd}
+                            onclick={(e) => handleMutationClick(e, mutation, card.index)}
                           >
                             <span>{mutation.mutation?.label ?? 'Changed'}</span>
-                            <button class="mut-x" onclick={() => handleRemoveMutation(mutation.id)}>×</button>
+                            <button class="mut-x" onclick={(e) => { e.stopPropagation(); handleRemoveMutation(mutation.id); }}>×</button>
                           </div>
                         {/each}
                       </div>
@@ -1085,18 +1208,26 @@
             {@const mut = item.placement}
             {@const mutObj = objects.get(mut.objectId)}
             {@const mutColor = mutObj ? objects.getEffectiveColor(mutObj.id) : '#888'}
+            {@const isActiveMutation = ui.activeMutationId === mut.id}
 
-            <div class="flow-item inline-mut">
+            <div
+              class="flow-item inline-mut"
+              use:registerInlineMutation={mut.id}
+            >
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="mut-chip standalone"
                 class:dragging={draggedId === mut.id && dragType === 'mutation'}
+                class:active={isActiveMutation}
                 style:--mc={mutColor}
                 draggable="true"
                 ondragstart={(e) => handleMutationDragStart(e, mut.id)}
                 ondragend={handleMutationDragEnd}
+                onclick={(e) => handleMutationClick(e, mut, undefined, true)}
               >
                 <span>{mut.mutation?.label ?? '~'}</span>
-                <button class="mut-x" onclick={() => handleRemoveMutation(mut.id)}>×</button>
+                <button class="mut-x" onclick={(e) => { e.stopPropagation(); handleRemoveMutation(mut.id); }}>×</button>
               </div>
             </div>
 
@@ -1318,6 +1449,7 @@
     height: 100%;
     background: var(--surface-base);
     border-top: 1px solid var(--border-subtle);
+    position: relative;
   }
   .timeline:focus { outline: none; }
 
@@ -1326,9 +1458,16 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    width: 100%;
     height: 2.25rem;
     padding: 0 var(--space-lg);
     background: var(--surface-raised);
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+  .collapsed-bar:hover {
+    background: var(--hover-bg);
   }
   .collapsed-title {
     font-size: 0.8125rem;
@@ -1556,6 +1695,19 @@
     );
     z-index: 0;
     border-radius: 1px;
+  }
+
+  /* Cursor highlight - spans from below header to bottom of timeline */
+  .cursor-highlight {
+    position: absolute;
+    top: 37px; /* Below header */
+    bottom: 0;
+    background: color-mix(in srgb, var(--accent-primary, #3b82f6) 6%, transparent);
+    border-left: 2px solid color-mix(in srgb, var(--accent-primary, #3b82f6) 35%, transparent);
+    border-right: 2px solid color-mix(in srgb, var(--accent-primary, #3b82f6) 35%, transparent);
+    pointer-events: none;
+    z-index: 1;
+    transition: left 0.15s ease-out, width 0.15s ease-out;
   }
 
   /* ============================================================================
@@ -1836,6 +1988,11 @@
   }
   .mut-chip.standalone {
     padding: 5px 12px 5px 10px;
+  }
+  .mut-chip.active {
+    outline: 2px solid var(--accent-primary, #3b82f6);
+    outline-offset: 1px;
+    background: color-mix(in srgb, var(--mc) 22%, var(--surface-raised));
   }
 
   .mut-x {

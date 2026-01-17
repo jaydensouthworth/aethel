@@ -65,6 +65,14 @@
 
   function handleClick() {
     ui.select(obj.id);
+
+    // If object is rendered on timeline, move cursor to it
+    if (obj.rendered) {
+      const index = timeline.getCardIndex(obj.id);
+      if (index >= 0) {
+        timeline.setCursorIndex(index);
+      }
+    }
   }
 
   function handleToggle(e: MouseEvent) {

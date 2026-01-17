@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { timelineHistory } from '$lib/stores';
+  import { timelineHistory, ui } from '$lib/stores';
 
   const canUndo = $derived(timelineHistory.canUndo);
   const canRedo = $derived(timelineHistory.canRedo);
@@ -12,6 +12,10 @@
 
   function handleRedo() {
     timelineHistory.redo();
+  }
+
+  function handleCollapse() {
+    ui.toggleTimeline();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -58,6 +62,14 @@
       </span>
     {/if}
   </div>
+
+  <button
+    class="header-btn collapse-btn"
+    onclick={handleCollapse}
+    title="Minimize timeline"
+  >
+    <span class="btn-icon">▼</span>
+  </button>
 </div>
 
 <style>
