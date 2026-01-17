@@ -1,12 +1,12 @@
 /**
- * Serialization utilities for project save/load
+ * Serialization utilities for project save/load (v2 - single-track model)
  *
  * Note: Uses dynamic imports to avoid circular dependency with stores
  */
 
 import type { AethelProject } from '$lib/types';
 
-const PROJECT_VERSION = '1.0.0';
+const PROJECT_VERSION = '2.0.0';
 
 /**
  * Serialize the current application state to an AethelProject object
@@ -15,7 +15,10 @@ export async function serializeProject(): Promise<AethelProject> {
   // Dynamic imports to avoid circular dependency
   const { objects } = await import('$lib/stores/objects.svelte');
   const { timeline } = await import('$lib/stores/timeline.svelte');
+  const { threads } = await import('$lib/stores/threads.svelte');
+  const { milestones } = await import('$lib/stores/milestones.svelte');
   const { ui } = await import('$lib/stores/ui.svelte');
+  const { timelineEditor } = await import('$lib/stores/timeline-editor.svelte');
 
   return {
     version: PROJECT_VERSION,
@@ -24,13 +27,19 @@ export async function serializeProject(): Promise<AethelProject> {
     // Core data
     objects: objects.all,
 
-    // Timeline data
+    // Timeline data (v2 format)
     timeline: {
       current: timeline.current,
       placements: timeline.allPlacements,
-      tracks: timeline.allTracks,
-      cursorPosition: timeline.cursorPosition,
+      // v2: threads and milestones
+      threads: threads.all,
+      milestones: milestones.all,
+      // v2: cursor index (not position)
+      cursorIndex: timeline.cursorIndex,
       panelHeight: timeline.panelHeight,
+      // Legacy (kept for backwards compatibility)
+      cursorPosition: timeline.cursorPosition,
+      tracks: timeline.allTracks,
     },
 
     // UI state - convert Set to Array for JSON serialization
@@ -40,6 +49,8 @@ export async function serializeProject(): Promise<AethelProject> {
       treePanelWidth: ui.treePanelWidth,
       treeExpandedIds: Array.from(ui.treeExpandedIds),
       propertiesPanelCollapsed: ui.propertiesPanelCollapsed,
+      // v2: visible threads
+      visibleThreadIds: Array.from(timelineEditor.visibleThreadIds),
     },
   };
 }
@@ -51,23 +62,36 @@ export async function deserializeProject(project: AethelProject): Promise<void> 
   // Dynamic imports to avoid circular dependency
   const { objects } = await import('$lib/stores/objects.svelte');
   const { timeline } = await import('$lib/stores/timeline.svelte');
+  const { threads } = await import('$lib/stores/threads.svelte');
+  const { milestones } = await import('$lib/stores/milestones.svelte');
   const { ui } = await import('$lib/stores/ui.svelte');
+  const { timelineEditor } = await import('$lib/stores/timeline-editor.svelte');
 
   // Clear existing state
   objects.clear();
   timeline.clear();
+  threads.clear();
+  milestones.clear();
   ui.clear();
+  timelineEditor.clear();
 
   // Restore objects
   objects.load(project.objects);
 
-  // Restore timeline
-  timeline.load(
+  // Restore threads and milestones
+  if (project.timeline.threads) {
+    threads.load(project.timeline.threads);
+  }
+  if (project.timeline.milestones) {
+    milestones.load(project.timeline.milestones);
+  }
+
+  // Restore timeline (v2 format)
+  timeline.loadV2(
     project.timeline.current,
     project.timeline.placements,
-    project.timeline.cursorPosition,
-    project.timeline.panelHeight,
-    project.timeline.tracks
+    project.timeline.cursorIndex ?? 0,
+    project.timeline.panelHeight
   );
 
   // Restore UI - convert Array back to Set
@@ -78,10 +102,15 @@ export async function deserializeProject(project: AethelProject): Promise<void> 
     treeExpandedIds: new Set(project.ui.treeExpandedIds),
     propertiesPanelCollapsed: project.ui.propertiesPanelCollapsed,
   });
+
+  // Restore thread visibility
+  if (project.ui.visibleThreadIds) {
+    timelineEditor.showAllThreads(project.ui.visibleThreadIds);
+  }
 }
 
 /**
- * Validate an AethelProject object structure
+ * Validate an AethelProject object structure (v2)
  */
 export function validateProject(data: unknown): data is AethelProject {
   if (!data || typeof data !== 'object') return false;
@@ -99,8 +128,9 @@ export function validateProject(data: unknown): data is AethelProject {
   const timeline = project.timeline as Record<string, unknown>;
   if (!timeline.current || typeof timeline.current !== 'object') return false;
   if (!Array.isArray(timeline.placements)) return false;
-  if (typeof timeline.cursorPosition !== 'number') return false;
   if (typeof timeline.panelHeight !== 'number') return false;
+  // v2: cursorIndex (cursorPosition is legacy)
+  if (typeof timeline.cursorIndex !== 'number' && typeof timeline.cursorPosition !== 'number') return false;
 
   // Check ui structure
   const ui = project.ui as Record<string, unknown>;

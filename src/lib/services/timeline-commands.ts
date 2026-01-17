@@ -4,9 +4,11 @@
  * Each command encapsulates an operation that can be executed and undone.
  */
 
-import type { AethelObject, TimelinePlacement } from '$lib/types';
+import type { AethelObject, TimelinePlacement, Thread, Milestone, MutationDisplay } from '$lib/types';
 import { objects } from '$lib/stores/objects.svelte';
 import { timeline } from '$lib/stores/timeline.svelte';
+import { threads } from '$lib/stores/threads.svelte';
+import { milestones } from '$lib/stores/milestones.svelte';
 
 // ============================================================================
 // Base Interface
@@ -493,6 +495,331 @@ export function createRemoveMarkerCommand(markerId: string): TimelineCommand {
 		},
 		undo: () => {
 			timeline.addMarker(markerCopy);
+		},
+	};
+}
+
+// ============================================================================
+// v2: Thread Commands
+// ============================================================================
+
+/**
+ * Add a thread
+ */
+export function createAddThreadCommand(thread: Thread): TimelineCommand {
+	return {
+		id: crypto.randomUUID(),
+		type: 'add-thread',
+		description: `Add thread "${thread.name}"`,
+		execute: () => {
+			threads.add(thread);
+		},
+		undo: () => {
+			threads.delete(thread.id);
+		},
+	};
+}
+
+/**
+ * Update a thread
+ */
+export function createUpdateThreadCommand(
+	threadId: string,
+	updates: Partial<Omit<Thread, 'id' | 'createdAt'>>
+): TimelineCommand {
+	const thread = threads.get(threadId);
+	if (!thread) {
+		throw new Error(`Thread ${threadId} not found`);
+	}
+
+	const originalValues: Record<string, unknown> = {};
+	for (const key of Object.keys(updates)) {
+		originalValues[key] = thread[key as keyof Thread];
+	}
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'update-thread',
+		description: `Update thread "${thread.name}"`,
+		execute: () => {
+			threads.update(threadId, updates);
+		},
+		undo: () => {
+			threads.update(threadId, originalValues as Partial<Omit<Thread, 'id' | 'createdAt'>>);
+		},
+	};
+}
+
+/**
+ * Delete a thread
+ */
+export function createDeleteThreadCommand(threadId: string): TimelineCommand {
+	const thread = threads.get(threadId);
+	if (!thread) {
+		throw new Error(`Thread ${threadId} not found`);
+	}
+
+	const threadCopy = { ...thread };
+	// Also store which placements were in this thread
+	const placementsInThread = timeline.getPlacementsInThread(threadId).map(p => p.id);
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'delete-thread',
+		description: `Delete thread "${thread.name}"`,
+		execute: () => {
+			// Remove thread from all placements
+			for (const placementId of placementsInThread) {
+				timeline.removePlacementFromThread(placementId, threadId);
+			}
+			threads.delete(threadId);
+		},
+		undo: () => {
+			threads.add(threadCopy);
+			// Restore thread to placements
+			for (const placementId of placementsInThread) {
+				timeline.addPlacementToThread(placementId, threadId);
+			}
+		},
+	};
+}
+
+/**
+ * Add a placement to a thread
+ */
+export function createAddToThreadCommand(
+	placementId: string,
+	threadId: string
+): TimelineCommand {
+	return {
+		id: crypto.randomUUID(),
+		type: 'add-to-thread',
+		description: `Add to thread`,
+		execute: () => {
+			timeline.addPlacementToThread(placementId, threadId);
+		},
+		undo: () => {
+			timeline.removePlacementFromThread(placementId, threadId);
+		},
+	};
+}
+
+/**
+ * Remove a placement from a thread
+ */
+export function createRemoveFromThreadCommand(
+	placementId: string,
+	threadId: string
+): TimelineCommand {
+	return {
+		id: crypto.randomUUID(),
+		type: 'remove-from-thread',
+		description: `Remove from thread`,
+		execute: () => {
+			timeline.removePlacementFromThread(placementId, threadId);
+		},
+		undo: () => {
+			timeline.addPlacementToThread(placementId, threadId);
+		},
+	};
+}
+
+// ============================================================================
+// v2: Milestone Commands
+// ============================================================================
+
+/**
+ * Add a milestone
+ */
+export function createAddMilestoneCommand(milestone: Milestone): TimelineCommand {
+	return {
+		id: crypto.randomUUID(),
+		type: 'add-milestone',
+		description: `Add milestone "${milestone.name}"`,
+		execute: () => {
+			milestones.add(milestone);
+		},
+		undo: () => {
+			milestones.delete(milestone.id);
+		},
+	};
+}
+
+/**
+ * Update a milestone
+ */
+export function createUpdateMilestoneCommand(
+	milestoneId: string,
+	updates: Partial<Omit<Milestone, 'id' | 'createdAt'>>
+): TimelineCommand {
+	const milestone = milestones.get(milestoneId);
+	if (!milestone) {
+		throw new Error(`Milestone ${milestoneId} not found`);
+	}
+
+	const originalValues: Record<string, unknown> = {};
+	for (const key of Object.keys(updates)) {
+		originalValues[key] = milestone[key as keyof Milestone];
+	}
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'update-milestone',
+		description: `Update milestone "${milestone.name}"`,
+		execute: () => {
+			milestones.update(milestoneId, updates);
+		},
+		undo: () => {
+			milestones.update(milestoneId, originalValues as Partial<Omit<Milestone, 'id' | 'createdAt'>>);
+		},
+	};
+}
+
+/**
+ * Delete a milestone
+ */
+export function createDeleteMilestoneCommand(milestoneId: string): TimelineCommand {
+	const milestone = milestones.get(milestoneId);
+	if (!milestone) {
+		throw new Error(`Milestone ${milestoneId} not found`);
+	}
+
+	const milestoneCopy = { ...milestone };
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'delete-milestone',
+		description: `Delete milestone "${milestone.name}"`,
+		execute: () => {
+			milestones.delete(milestoneId);
+		},
+		undo: () => {
+			milestones.add(milestoneCopy);
+		},
+	};
+}
+
+/**
+ * Move a milestone to a new position
+ */
+export function createMoveMilestoneCommand(
+	milestoneId: string,
+	newAfterIndex: number
+): TimelineCommand {
+	const milestone = milestones.get(milestoneId);
+	if (!milestone) {
+		throw new Error(`Milestone ${milestoneId} not found`);
+	}
+
+	const originalAfterIndex = milestone.afterIndex;
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'move-milestone',
+		description: `Move milestone "${milestone.name}"`,
+		execute: () => {
+			milestones.move(milestoneId, newAfterIndex);
+		},
+		undo: () => {
+			milestones.move(milestoneId, originalAfterIndex);
+		},
+	};
+}
+
+// ============================================================================
+// v2: Mutation Display Commands
+// ============================================================================
+
+/**
+ * Change a mutation's display mode (between vs below)
+ */
+export function createChangeMutationDisplayCommand(
+	placementId: string,
+	display: MutationDisplay,
+	options?: {
+		attachedToObjectId?: string;
+		afterRenderedIndex?: number;
+	}
+): TimelineCommand {
+	const placement = timeline.getPlacement(placementId);
+	if (!placement) {
+		throw new Error(`Placement ${placementId} not found`);
+	}
+
+	const originalDisplay = placement.mutationDisplay;
+	const originalAttachedTo = placement.attachedToObjectId;
+	const originalAfterIndex = placement.afterRenderedIndex;
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'change-mutation-display',
+		description: `Change mutation display to ${display}`,
+		execute: () => {
+			timeline.setMutationDisplay(placementId, display, options);
+		},
+		undo: () => {
+			timeline.setMutationDisplay(placementId, originalDisplay ?? 'between', {
+				attachedToObjectId: originalAttachedTo,
+				afterRenderedIndex: originalAfterIndex,
+			});
+		},
+	};
+}
+
+// ============================================================================
+// v2: Card Reorder Commands
+// ============================================================================
+
+/**
+ * Reorder a card (change object's position in rendered order)
+ * This changes the object's sortOrder to move it to a new position
+ */
+export function createReorderCardCommand(
+	objectId: string,
+	newIndex: number
+): TimelineCommand {
+	const obj = objects.get(objectId);
+	if (!obj) {
+		throw new Error(`Object ${objectId} not found`);
+	}
+
+	const originalSortOrder = obj.sortOrder;
+	const currentIndex = timeline.getCardIndex(objectId);
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'reorder-card',
+		description: `Reorder "${obj.name}"`,
+		execute: () => {
+			objects.reorder(objectId, newIndex);
+		},
+		undo: () => {
+			// Restore original sort order
+			objects.update(objectId, { sortOrder: originalSortOrder });
+		},
+	};
+}
+
+/**
+ * Toggle an object's rendered status (adds/removes from timeline cards)
+ */
+export function createToggleRenderedCommand(objectId: string): TimelineCommand {
+	const obj = objects.get(objectId);
+	if (!obj) {
+		throw new Error(`Object ${objectId} not found`);
+	}
+
+	const originalRendered = obj.rendered;
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'toggle-rendered',
+		description: originalRendered ? `Remove "${obj.name}" from timeline` : `Add "${obj.name}" to timeline`,
+		execute: () => {
+			objects.update(objectId, { rendered: !originalRendered });
+		},
+		undo: () => {
+			objects.update(objectId, { rendered: originalRendered });
 		},
 	};
 }

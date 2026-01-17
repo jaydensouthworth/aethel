@@ -1,7 +1,9 @@
-import { createObject, createPlacement } from '$lib/types';
-import type { AethelObject, TimelinePlacement } from '$lib/types';
+import { createObject, createPlacement, createThread as createThreadType, createMilestone as createMilestoneType } from '$lib/types';
+import type { AethelObject, TimelinePlacement, Thread, Milestone, MutationDisplay } from '$lib/types';
 import { objects } from '$lib/stores/objects.svelte';
 import { timeline } from '$lib/stores/timeline.svelte';
+import { threads } from '$lib/stores/threads.svelte';
+import { milestones } from '$lib/stores/milestones.svelte';
 import { ui } from '$lib/stores/ui.svelte';
 import { timelineEditor } from '$lib/stores/timeline-editor.svelte';
 import { timelineHistory } from '$lib/stores/timeline-history.svelte';
@@ -20,6 +22,19 @@ import {
 	createDeleteMultiplePlacementsCommand,
 	createAddMarkerCommand,
 	createRemoveMarkerCommand,
+	// v2 commands
+	createAddThreadCommand,
+	createUpdateThreadCommand,
+	createDeleteThreadCommand,
+	createAddToThreadCommand,
+	createRemoveFromThreadCommand,
+	createAddMilestoneCommand,
+	createUpdateMilestoneCommand,
+	createDeleteMilestoneCommand,
+	createMoveMilestoneCommand,
+	createChangeMutationDisplayCommand,
+	createReorderCardCommand,
+	createToggleRenderedCommand,
 } from './timeline-commands';
 
 // ============================================================================
@@ -658,5 +673,314 @@ export function pasteAtCursor(): void {
 	timelineEditor.clearSelection();
 	for (const id of newIds) {
 		timelineEditor.select(id, true);
+	}
+}
+
+// ============================================================================
+// v2: Thread Operations
+// ============================================================================
+
+/**
+ * Create a new thread
+ */
+export function createThread(
+	name: string,
+	color: string,
+	options?: {
+		description?: string;
+		icon?: string;
+		showOnTimeline?: boolean;
+		showConnectingLines?: boolean;
+	}
+): Thread {
+	const thread = createThreadType(name, color, options);
+	const command = createAddThreadCommand(thread);
+	timelineHistory.execute(command);
+
+	// Show the thread on timeline
+	timelineEditor.showThread(thread.id);
+
+	return thread;
+}
+
+/**
+ * Update a thread
+ */
+export function updateThread(
+	threadId: string,
+	updates: Partial<Omit<Thread, 'id' | 'createdAt'>>
+): void {
+	const command = createUpdateThreadCommand(threadId, updates);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Delete a thread
+ */
+export function deleteThread(threadId: string): void {
+	const command = createDeleteThreadCommand(threadId);
+	timelineHistory.execute(command);
+
+	// Hide from timeline
+	timelineEditor.hideThread(threadId);
+}
+
+/**
+ * Add a placement to a thread
+ */
+export function addPlacementToThread(placementId: string, threadId: string): void {
+	const command = createAddToThreadCommand(placementId, threadId);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Remove a placement from a thread
+ */
+export function removePlacementFromThread(placementId: string, threadId: string): void {
+	const command = createRemoveFromThreadCommand(placementId, threadId);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Add multiple placements to a thread
+ */
+export function addPlacementsToThread(placementIds: string[], threadId: string): void {
+	if (placementIds.length === 0) return;
+
+	const batch = timelineHistory.beginBatch(`Add ${placementIds.length} to thread`);
+	for (const id of placementIds) {
+		batch.add(createAddToThreadCommand(id, threadId));
+	}
+	batch.commit();
+}
+
+// ============================================================================
+// v2: Milestone Operations
+// ============================================================================
+
+/**
+ * Create a new milestone
+ */
+export function createMilestone(
+	name: string,
+	afterIndex: number,
+	options?: {
+		color?: string;
+		description?: string;
+		exportAs?: 'part' | 'act' | 'section' | 'book';
+		exportTitle?: string;
+	}
+): Milestone {
+	const milestone = createMilestoneType(name, afterIndex, options);
+	const command = createAddMilestoneCommand(milestone);
+	timelineHistory.execute(command);
+	return milestone;
+}
+
+/**
+ * Update a milestone
+ */
+export function updateMilestone(
+	milestoneId: string,
+	updates: Partial<Omit<Milestone, 'id' | 'createdAt'>>
+): void {
+	const command = createUpdateMilestoneCommand(milestoneId, updates);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Delete a milestone
+ */
+export function deleteMilestone(milestoneId: string): void {
+	const command = createDeleteMilestoneCommand(milestoneId);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Move a milestone to a new position
+ */
+export function moveMilestone(milestoneId: string, newAfterIndex: number): void {
+	const command = createMoveMilestoneCommand(milestoneId, newAfterIndex);
+	timelineHistory.execute(command);
+}
+
+// ============================================================================
+// v2: Mutation Display Operations
+// ============================================================================
+
+/**
+ * Set a mutation to display between cards (in the flow)
+ */
+export function setMutationDisplayBetween(placementId: string, afterIndex: number): void {
+	const command = createChangeMutationDisplayCommand(placementId, 'between', {
+		afterRenderedIndex: afterIndex,
+	});
+	timelineHistory.execute(command);
+}
+
+/**
+ * Set a mutation to display below a card (attached)
+ */
+export function setMutationDisplayBelow(placementId: string, attachedToObjectId: string): void {
+	const command = createChangeMutationDisplayCommand(placementId, 'below', {
+		attachedToObjectId,
+	});
+	timelineHistory.execute(command);
+}
+
+/**
+ * Add a mutation between cards (v2)
+ */
+export function addMutationBetweenV2(
+	objectId: string,
+	afterRenderedIndex: number,
+	label: string,
+	changes: Record<string, { from: unknown; to: unknown }> = {},
+	threadIds?: string[]
+): TimelinePlacement {
+	const placement = createPlacement(objectId, 'mutation', {
+		mutationDisplay: 'between',
+		afterRenderedIndex,
+		mutation: { label, changes },
+		threadIds,
+	});
+
+	const command = createAddPlacementCommand(placement);
+	timelineHistory.execute(command);
+
+	timelineEditor.selectMutation(placement.id);
+
+	return placement;
+}
+
+/**
+ * Add a mutation below a card (v2)
+ */
+export function addMutationBelowV2(
+	objectId: string,
+	attachedToObjectId: string,
+	label: string,
+	changes: Record<string, { from: unknown; to: unknown }> = {},
+	threadIds?: string[]
+): TimelinePlacement {
+	const placement = createPlacement(objectId, 'mutation', {
+		mutationDisplay: 'below',
+		attachedToObjectId,
+		mutation: { label, changes },
+		threadIds,
+	});
+
+	const command = createAddPlacementCommand(placement);
+	timelineHistory.execute(command);
+
+	timelineEditor.selectMutation(placement.id);
+
+	return placement;
+}
+
+// ============================================================================
+// v2: Card Operations
+// ============================================================================
+
+/**
+ * Reorder a card to a new position in the timeline
+ */
+export function reorderCard(objectId: string, newIndex: number): void {
+	const command = createReorderCardCommand(objectId, newIndex);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Toggle whether an object is rendered (shown as a card)
+ */
+export function toggleCardRendered(objectId: string): void {
+	const command = createToggleRenderedCommand(objectId);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Add an object as a card to the timeline
+ * Sets rendered: true and optionally creates a creation placement
+ */
+export function addObjectAsCard(objectId: string): void {
+	const obj = objects.get(objectId);
+	if (!obj) return;
+
+	if (obj.rendered) {
+		// Already a card
+		return;
+	}
+
+	const batch = timelineHistory.beginBatch(`Add "${obj.name}" to timeline`);
+
+	// Set rendered to true
+	batch.add(createToggleRenderedCommand(objectId));
+
+	// Create a creation placement
+	const placement = createPlacement(objectId, 'creation', {});
+	batch.add(createAddPlacementCommand(placement));
+
+	batch.commit();
+
+	// Select the new card
+	timelineEditor.selectCard(objectId);
+}
+
+/**
+ * Remove an object from the timeline (remove card)
+ * Sets rendered: false
+ */
+export function removeObjectFromCards(objectId: string): void {
+	const obj = objects.get(objectId);
+	if (!obj) return;
+
+	if (!obj.rendered) {
+		// Not a card
+		return;
+	}
+
+	const command = createToggleRenderedCommand(objectId);
+	timelineHistory.execute(command);
+}
+
+// ============================================================================
+// v2: Navigation Operations
+// ============================================================================
+
+/**
+ * Navigate to a specific card by index
+ */
+export function navigateToCard(index: number): void {
+	const card = timeline.getCardAt(index);
+	if (card) {
+		timelineEditor.selectCard(card.object.id);
+		timeline.setCursorIndex(index);
+	}
+}
+
+/**
+ * Navigate to the next card
+ */
+export function navigateToNextCard(): void {
+	timelineEditor.selectNextCard();
+	timeline.cursorNext();
+}
+
+/**
+ * Navigate to the previous card
+ */
+export function navigateToPrevCard(): void {
+	timelineEditor.selectPrevCard();
+	timeline.cursorPrev();
+}
+
+/**
+ * Navigate to a card by object ID
+ */
+export function navigateToObject(objectId: string): void {
+	const index = timeline.getCardIndex(objectId);
+	if (index >= 0) {
+		timelineEditor.selectCard(objectId);
+		timeline.setCursorIndex(index);
 	}
 }

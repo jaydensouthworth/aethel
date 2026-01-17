@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { objects, timeline, ui, project, timelineEditor } from '$lib/stores';
-  import { createObject, getObjectType } from '$lib/types';
+  import { objects, timeline, ui, project, timelineEditor, threads, milestones } from '$lib/stores';
+  import { createObject, getObjectType, createThread, createMilestone } from '$lib/types';
   import type { TimelinePlacement, AethelObject } from '$lib/types';
   import ObjectTree from '$lib/components/ObjectTree.svelte';
   import ObjectPropertiesPanel from '$lib/components/ObjectPropertiesPanel.svelte';
-  import TimelineStrip from '$lib/components/TimelineStrip.svelte';
-  import TimelineToolbar from '$lib/components/timeline/TimelineToolbar.svelte';
+  import SingleTrackTimeline from '$lib/components/timeline/SingleTrackTimeline.svelte';
   import SplashScreen from '$lib/components/SplashScreen.svelte';
   import Editor from '$lib/editor/Editor.svelte';
   import { handleKeyDown as handleTimelineShortcut } from '$lib/services/timeline-shortcuts';
@@ -41,6 +40,7 @@
     placement: null as TimelinePlacement | null,
   });
 
+  // Track menu state - kept for backwards compatibility but may be simplified
   let trackMenuState = $state({
     open: false,
     x: 0,
@@ -363,38 +363,57 @@
       (folder) => ui.setTreeExpanded(folder.id, true)
     );
 
-    // Create timeline placements
-    // Track 0: Chapters (story structure)
-    timeline.addCreation(ch1.id, 1, 0);
-    timeline.addCreation(ch2.id, 2, 0);
-    timeline.addCreation(ch3.id, 3, 0);
+    // Create sample threads (narrative arcs)
+    const ringThread = createThread('The Ring', '#f59e0b');
+    ringThread.description = 'The journey of the One Ring';
+    threads.add(ringThread);
 
-    // Track 1: Scenes and flashbacks
-    timeline.addCreation(scene1.id, 0.5, 1);
+    const frodoThread = createThread("Frodo's Journey", '#3b82f6');
+    frodoThread.description = "Frodo's character arc";
+    threads.add(frodoThread);
 
-    // Track 2: Character mutations (state changes)
-    timeline.addMutation(
+    // Make threads visible
+    timelineEditor.showThread(ringThread.id);
+    timelineEditor.showThread(frodoThread.id);
+
+    // Create timeline placements (v2 single-track model)
+    // Rendered chapters appear as cards in the flow
+    timeline.addCreationV2(ch1.id);
+    timeline.addCreationV2(ch2.id);
+    timeline.addCreationV2(ch3.id);
+
+    // Scene appears in the flow (between chapters)
+    timeline.addCreationV2(scene1.id);
+
+    // Create a milestone (Act/Part divider)
+    const act1 = createMilestone('Act I: The Shire', 1);
+    act1.color = '#6366f1';
+    act1.exportAs = 'act';
+    milestones.add(act1);
+
+    // Character mutations - attached below relevant chapters, with thread associations
+    timeline.addMutationBelow(
       frodo.id,
-      1,
+      ch1.id,
       'Frodo inherits the Ring',
       { hasRing: { from: false, to: true } },
-      2
+      [ringThread.id, frodoThread.id]
     );
-    timeline.addMutation(
+    timeline.addMutationBelow(
       frodo.id,
-      3,
+      ch3.id,
       'Frodo leaves the Shire',
       { location: { from: 'Bag End', to: 'The Road' } },
-      2
+      [frodoThread.id]
     );
 
-    // Track 3: Item mutations
-    timeline.addMutation(
+    // Item mutations - attached below the chapter where it happens
+    timeline.addMutationBelow(
       theRing.id,
-      1,
+      ch1.id,
       'Ring passes to Frodo',
       { owner: { from: 'Bilbo', to: 'Frodo' } },
-      3
+      [ringThread.id]
     );
   }
 
@@ -656,17 +675,7 @@
     class:collapsed={ui.timelineCollapsed}
     style:height="{ui.timelineCollapsed ? 40 : timeline.panelHeight}px"
   >
-    {#if !ui.timelineCollapsed}
-      <TimelineToolbar />
-    {/if}
-    <div class="timeline-strip-wrapper">
-      <TimelineStrip
-        onplacementcontextmenu={handlePlacementContextMenu}
-        onplacementsplit={handlePlacementSplit}
-        ontrackcontextmenu={handleTrackContextMenu}
-        oncreateobject={handleTimelineCreateObject}
-      />
-    </div>
+    <SingleTrackTimeline collapsed={ui.timelineCollapsed} />
   </footer>
 </div>
 
@@ -906,12 +915,5 @@
 
   .timeline-panel.collapsed {
     height: 40px !important;
-  }
-
-  .timeline-strip-wrapper {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
   }
 </style>

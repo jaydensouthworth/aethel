@@ -1,5 +1,5 @@
 /**
- * Timeline Editor State Store
+ * Timeline Editor State Store (v2 - single-track card model)
  * Uses Svelte 5 Runes for reactivity
  */
 
@@ -10,9 +10,23 @@ import { ui } from './ui.svelte';
 // Types
 // ============================================================================
 
+/** @deprecated Use v2 tools instead */
 export type EditingTool = 'select' | 'razor' | 'slip' | 'slide';
 export type MovementMode = 'free' | 'magnetic';
 
+/**
+ * v2 Drag state for single-track model
+ */
+export interface DragStateV2 {
+  isDragging: boolean;
+  type: 'reorder-card' | 'move-mutation' | 'attach-mutation' | null;
+  sourceId: string | null;
+  sourceType: 'card' | 'mutation' | null;
+  targetIndex: number | null;
+  targetObjectId: string | null; // For attach-mutation
+}
+
+/** @deprecated Use DragStateV2 */
 export interface DragState {
   isDragging: boolean;
   type: 'move' | 'resize-start' | 'resize-end' | 'slip' | null;
@@ -35,9 +49,12 @@ export interface TimelineEditorSnapshot {
   scrollOffset: number;
   snapEnabled: boolean;
   snapGridSize: number;
+  /** @deprecated */
   lockedTracks: number[];
   lockedPlacements: string[];
   groups: Record<string, string[]>;
+  // v2 additions
+  visibleThreadIds?: string[];
 }
 
 // ============================================================================
@@ -57,18 +74,46 @@ const DEFAULT_DRAG_STATE: DragState = {
   currentTrack: 0,
 };
 
+const DEFAULT_DRAG_STATE_V2: DragStateV2 = {
+  isDragging: false,
+  type: null,
+  sourceId: null,
+  sourceType: null,
+  targetIndex: null,
+  targetObjectId: null,
+};
+
 class TimelineEditorStore {
   // ============================================================================
-  // Core State
+  // v2 Core State (single-track model)
   // ============================================================================
 
+  // Currently selected card (object ID)
+  selectedCardId = $state<string | null>(null);
+
+  // Selected mutation IDs
+  selectedMutationIds = $state<Set<string>>(new Set());
+
+  // v2 drag state
+  dragStateV2 = $state<DragStateV2>({ ...DEFAULT_DRAG_STATE_V2 });
+
+  // Thread visibility
+  visibleThreadIds = $state<Set<string>>(new Set());
+
+  // ============================================================================
+  // Legacy Core State (kept for backwards compatibility)
+  // ============================================================================
+
+  /** @deprecated Use selectedCardId and selectedMutationIds */
   activeTool = $state<EditingTool>('select');
   movementMode = $state<MovementMode>('free');
 
+  /** @deprecated Use selectedMutationIds */
   selectedPlacementIds = $state<Set<string>>(new Set());
   highlightedPlacementIds = $state<Set<string>>(new Set());
   _highlightTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  /** @deprecated Use dragStateV2 */
   dragState = $state<DragState>({ ...DEFAULT_DRAG_STATE });
 
   selectionBox = $state<SelectionBox | null>(null);
@@ -79,6 +124,7 @@ class TimelineEditorStore {
   snapEnabled = $state<boolean>(true);
   snapGridSize = $state<number>(1.0);
 
+  /** @deprecated Tracks removed in v2 */
   lockedTracks = $state<Set<number>>(new Set());
   lockedPlacements = $state<Set<string>>(new Set());
 
@@ -87,17 +133,55 @@ class TimelineEditorStore {
   clipboard = $state<string[]>([]);
 
   // ============================================================================
-  // Derived State
+  // v2 Derived State
   // ============================================================================
 
+  // Has a card selected
+  hasCardSelection = $derived(this.selectedCardId !== null);
+
+  // Has any mutation selected
+  hasMutationSelection = $derived(this.selectedMutationIds.size > 0);
+
+  // Has any selection (card or mutation)
+  hasAnySelection = $derived(this.hasCardSelection || this.hasMutationSelection);
+
+  // Get the selected card
+  get selectedCard() {
+    if (!this.selectedCardId) return null;
+    return timeline.cards.find((c) => c.object.id === this.selectedCardId) ?? null;
+  }
+
+  // Get selected mutations
+  get selectedMutations() {
+    return Array.from(this.selectedMutationIds)
+      .map((id) => timeline.getPlacement(id))
+      .filter((p) => p !== undefined && p.type === 'mutation');
+  }
+
+  // Visible card range based on scroll
+  get visibleCardRange() {
+    const totalCards = timeline.cardCount;
+    const cardsPerView = Math.ceil(10 / this.zoom); // Approximate cards visible
+    const startIndex = Math.floor(this.scrollOffset);
+    const endIndex = Math.min(totalCards, startIndex + cardsPerView);
+    return { startIndex, endIndex };
+  }
+
+  // ============================================================================
+  // Legacy Derived State
+  // ============================================================================
+
+  /** @deprecated Use hasAnySelection */
   hasSelection = $derived(this.selectedPlacementIds.size > 0);
 
+  /** @deprecated */
   get selectedPlacements() {
     return Array.from(this.selectedPlacementIds)
       .map((id) => timeline.getPlacement(id))
       .filter((p) => p !== undefined);
   }
 
+  /** @deprecated */
   get visibleRange() {
     const currentZoom = this.zoom;
     const currentScrollOffset = this.scrollOffset;
@@ -111,9 +195,211 @@ class TimelineEditorStore {
   }
 
   // ============================================================================
-  // Tool and Mode
+  // v2 Card Selection Operations
   // ============================================================================
 
+  /**
+   * Select a card by object ID
+   */
+  selectCard(objectId: string): void {
+    this.selectedCardId = objectId;
+    this.selectedMutationIds = new Set(); // Clear mutation selection
+    ui.select(objectId); // Sync with object selection
+    timeline.moveCursorToObject(objectId); // Move cursor to card
+  }
+
+  /**
+   * Clear card selection
+   */
+  clearCardSelection(): void {
+    this.selectedCardId = null;
+  }
+
+  /**
+   * Select a mutation
+   */
+  selectMutation(placementId: string, additive: boolean = false): void {
+    if (!additive) {
+      this.selectedMutationIds = new Set([placementId]);
+      this.selectedCardId = null; // Clear card selection
+    } else {
+      this.selectedMutationIds.add(placementId);
+    }
+
+    // Sync with object selection
+    const placement = timeline.getPlacement(placementId);
+    if (placement) {
+      ui.select(placement.objectId);
+    }
+  }
+
+  /**
+   * Toggle mutation selection
+   */
+  toggleMutationSelection(placementId: string): void {
+    if (this.selectedMutationIds.has(placementId)) {
+      this.selectedMutationIds.delete(placementId);
+    } else {
+      this.selectedMutationIds.add(placementId);
+    }
+  }
+
+  /**
+   * Clear mutation selection
+   */
+  clearMutationSelection(): void {
+    this.selectedMutationIds = new Set();
+  }
+
+  /**
+   * Clear all selection (cards and mutations)
+   */
+  clearAllSelection(): void {
+    this.selectedCardId = null;
+    this.selectedMutationIds = new Set();
+  }
+
+  /**
+   * Select next card
+   */
+  selectNextCard(): void {
+    const currentIndex = this.selectedCardId
+      ? timeline.getCardIndex(this.selectedCardId)
+      : -1;
+    const nextIndex = Math.min(currentIndex + 1, timeline.cardCount - 1);
+    const card = timeline.getCardAt(nextIndex);
+    if (card) {
+      this.selectCard(card.object.id);
+    }
+  }
+
+  /**
+   * Select previous card
+   */
+  selectPrevCard(): void {
+    const currentIndex = this.selectedCardId
+      ? timeline.getCardIndex(this.selectedCardId)
+      : timeline.cardCount;
+    const prevIndex = Math.max(currentIndex - 1, 0);
+    const card = timeline.getCardAt(prevIndex);
+    if (card) {
+      this.selectCard(card.object.id);
+    }
+  }
+
+  // ============================================================================
+  // v2 Thread Visibility
+  // ============================================================================
+
+  /**
+   * Show a thread
+   */
+  showThread(threadId: string): void {
+    this.visibleThreadIds.add(threadId);
+  }
+
+  /**
+   * Hide a thread
+   */
+  hideThread(threadId: string): void {
+    this.visibleThreadIds.delete(threadId);
+  }
+
+  /**
+   * Toggle thread visibility
+   */
+  toggleThreadVisibility(threadId: string): void {
+    if (this.visibleThreadIds.has(threadId)) {
+      this.visibleThreadIds.delete(threadId);
+    } else {
+      this.visibleThreadIds.add(threadId);
+    }
+  }
+
+  /**
+   * Show all threads
+   */
+  showAllThreads(threadIds: string[]): void {
+    this.visibleThreadIds = new Set(threadIds);
+  }
+
+  /**
+   * Hide all threads
+   */
+  hideAllThreads(): void {
+    this.visibleThreadIds = new Set();
+  }
+
+  /**
+   * Check if a thread is visible
+   */
+  isThreadVisible(threadId: string): boolean {
+    return this.visibleThreadIds.has(threadId);
+  }
+
+  // ============================================================================
+  // v2 Drag Operations
+  // ============================================================================
+
+  /**
+   * Start dragging a card for reordering
+   */
+  startCardDrag(objectId: string): void {
+    this.dragStateV2 = {
+      isDragging: true,
+      type: 'reorder-card',
+      sourceId: objectId,
+      sourceType: 'card',
+      targetIndex: null,
+      targetObjectId: null,
+    };
+  }
+
+  /**
+   * Start dragging a mutation
+   */
+  startMutationDrag(placementId: string): void {
+    this.dragStateV2 = {
+      isDragging: true,
+      type: 'move-mutation',
+      sourceId: placementId,
+      sourceType: 'mutation',
+      targetIndex: null,
+      targetObjectId: null,
+    };
+  }
+
+  /**
+   * Update drag target
+   */
+  updateDragTarget(targetIndex: number | null, targetObjectId: string | null = null): void {
+    if (!this.dragStateV2.isDragging) return;
+    this.dragStateV2 = {
+      ...this.dragStateV2,
+      targetIndex,
+      targetObjectId,
+    };
+  }
+
+  /**
+   * End drag operation
+   */
+  endDragV2(): void {
+    this.dragStateV2 = { ...DEFAULT_DRAG_STATE_V2 };
+  }
+
+  /**
+   * Check if currently dragging
+   */
+  get isDraggingV2(): boolean {
+    return this.dragStateV2.isDragging;
+  }
+
+  // ============================================================================
+  // Legacy Tool and Mode
+  // ============================================================================
+
+  /** @deprecated */
   setTool(tool: EditingTool): void {
     this.activeTool = tool;
   }
@@ -513,6 +799,8 @@ class TimelineEditorStore {
       groups: Object.fromEntries(
         Array.from(this.groups.entries()).map(([k, v]) => [k, Array.from(v)])
       ),
+      // v2 additions
+      visibleThreadIds: Array.from(this.visibleThreadIds),
     };
   }
 
@@ -524,9 +812,18 @@ class TimelineEditorStore {
     this.lockedTracks = new Set(snapshot.lockedTracks ?? []);
     this.lockedPlacements = new Set(snapshot.lockedPlacements ?? []);
     this.groups = new Map(Object.entries(snapshot.groups ?? {}).map(([k, v]) => [k, new Set(v)]));
+    // v2 additions
+    this.visibleThreadIds = new Set(snapshot.visibleThreadIds ?? []);
   }
 
   clear(): void {
+    // v2 state
+    this.selectedCardId = null;
+    this.selectedMutationIds = new Set();
+    this.dragStateV2 = { ...DEFAULT_DRAG_STATE_V2 };
+    this.visibleThreadIds = new Set();
+
+    // Legacy state
     this.activeTool = 'select';
     this.movementMode = 'free';
     this.selectedPlacementIds = new Set();

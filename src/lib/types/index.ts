@@ -131,6 +131,50 @@ export interface AethelObject {
 // ============================================================================
 
 /**
+ * Thread - Tracks narrative arcs across the timeline (plot threads, character arcs, etc.)
+ * Generic primitive: books use "plot threads", papers might use "argument threads"
+ */
+export interface Thread {
+  id: string;
+  name: string;
+  color: string;
+  description?: string;
+  icon?: string;
+  // Timeline visibility
+  showOnTimeline: boolean;
+  showConnectingLines: boolean;
+  // Ordering
+  sortOrder?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Milestone - Section groupings for timeline organization (acts, parts, sections)
+ * Appears between cards as visual dividers
+ */
+export interface Milestone {
+  id: string;
+  name: string;
+  color?: string;
+  description?: string;
+  // Position: after which rendered object index this milestone appears
+  afterIndex: number;
+  // Export metadata
+  exportAs?: 'part' | 'act' | 'section' | 'book';
+  exportTitle?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * MutationDisplay - How a mutation is displayed on the timeline
+ * - 'between': appears as a marker in the flow between cards
+ * - 'below': attached underneath a specific chapter card
+ */
+export type MutationDisplay = 'between' | 'below';
+
+/**
  * TimelinePlacement - Represents an object's appearance on the timeline.
  * An object can have multiple placements (creations, mutations, ranges).
  */
@@ -138,8 +182,23 @@ export interface TimelinePlacement {
   id: string;
   objectId: string; // Reference to AethelObject
   type: 'creation' | 'mutation'; // What kind of placement
-  track: number; // Track index (0, 1, 2...) - fully flexible
-  position: number; // Start position on timeline
+
+  // === Single-track positioning (v2) ===
+  // For mutations with 'below' display: attach to this card
+  attachedToObjectId?: string;
+  // For mutations with 'between' display: position after this rendered index
+  afterRenderedIndex?: number;
+  // How this mutation is displayed (only for type: 'mutation')
+  mutationDisplay?: MutationDisplay;
+  // Thread associations (many-to-many)
+  threadIds?: string[];
+
+  // === Legacy track-based positioning (v1 - kept for migration) ===
+  /** @deprecated Use single-track model instead */
+  track?: number; // Track index (0, 1, 2...)
+  /** @deprecated Use afterRenderedIndex instead */
+  position?: number; // Start position on timeline
+  /** @deprecated No longer used in single-track model */
   endPosition?: number; // Optional end (for ranges)
 
   // For mutations only
@@ -151,6 +210,7 @@ export interface TimelinePlacement {
   // Editor state (persisted)
   locked?: boolean; // Prevent editing
   groupId?: string; // Group membership for batch operations
+  /** @deprecated No longer used in single-track model */
   slipOffset?: number; // For slip tool - offset into content
 
   createdAt: string;
@@ -159,6 +219,7 @@ export interface TimelinePlacement {
 
 /**
  * TimelineTrack - Configuration for a timeline track
+ * @deprecated Use single-track model with Threads instead
  */
 export interface TimelineTrack {
   id: number;
@@ -170,6 +231,10 @@ export interface TimelineTrack {
   solo?: boolean; // Solo track (highlight this, dim others)
 }
 
+/**
+ * TimelineMarker - Named position markers on timeline
+ * @deprecated Use Milestone instead for section groupings
+ */
 export interface TimelineMarker {
   id: string;
   name?: string;
@@ -203,19 +268,29 @@ export interface ProjectConfig {
  * Used for localStorage auto-save and file export/import
  */
 export interface AethelProject {
-  version: string; // "1.0.0" - for migration support
+  version: string; // "2.0.0" - for migration support
   savedAt: string; // ISO timestamp
 
   // Core data
   objects: AethelObject[];
 
-  // Timeline data
+  // Timeline data (v2 - single-track model)
   timeline: {
     current: Timeline;
     placements: TimelinePlacement[];
-    tracks?: TimelineTrack[]; // Track configuration
-    cursorPosition: number;
+    // v2: Threads for tracking narrative arcs
+    threads?: Thread[];
+    // v2: Milestones for section groupings
+    milestones?: Milestone[];
+    // v2: Cursor indexes into rendered objects (not absolute position)
+    cursorIndex: number;
     panelHeight: number;
+
+    // Legacy v1 fields (kept for migration)
+    /** @deprecated Use cursorIndex instead */
+    cursorPosition?: number;
+    /** @deprecated Tracks removed in v2 single-track model */
+    tracks?: TimelineTrack[];
   };
 
   // UI state (persisted for continuity)
@@ -225,6 +300,8 @@ export interface AethelProject {
     treePanelWidth: number;
     treeExpandedIds: string[]; // Serialized from Set<string>
     propertiesPanelCollapsed: boolean;
+    // v2: Track which threads are visible
+    visibleThreadIds?: string[];
   };
 }
 
@@ -276,16 +353,23 @@ export function createObject(
 }
 
 /**
- * Create a new timeline placement
+ * Create a new timeline placement (v2 - single-track model)
  */
 export function createPlacement(
   objectId: string,
   type: 'creation' | 'mutation',
-  position: number,
-  track: number = 0,
   options?: {
-    endPosition?: number;
+    // For mutations: display mode
+    mutationDisplay?: MutationDisplay;
+    attachedToObjectId?: string; // For 'below' display
+    afterRenderedIndex?: number; // For 'between' display
+    // Thread associations
+    threadIds?: string[];
+    // Mutation data
     mutation?: { label: string; changes: Record<string, { from: unknown; to: unknown }> };
+    // Legacy support
+    position?: number;
+    track?: number;
   }
 ): TimelinePlacement {
   const now = new Date().toISOString();
@@ -293,10 +377,69 @@ export function createPlacement(
     id: createObjectId(),
     objectId,
     type,
-    track,
-    position,
-    endPosition: options?.endPosition,
+    // v2 fields
+    mutationDisplay: options?.mutationDisplay,
+    attachedToObjectId: options?.attachedToObjectId,
+    afterRenderedIndex: options?.afterRenderedIndex,
+    threadIds: options?.threadIds,
     mutation: options?.mutation,
+    // Legacy fields (for migration compatibility)
+    track: options?.track,
+    position: options?.position,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Create a new thread
+ */
+export function createThread(
+  name: string,
+  color: string,
+  options?: {
+    description?: string;
+    icon?: string;
+    showOnTimeline?: boolean;
+    showConnectingLines?: boolean;
+  }
+): Thread {
+  const now = new Date().toISOString();
+  return {
+    id: createObjectId(),
+    name,
+    color,
+    description: options?.description,
+    icon: options?.icon,
+    showOnTimeline: options?.showOnTimeline ?? true,
+    showConnectingLines: options?.showConnectingLines ?? true,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Create a new milestone
+ */
+export function createMilestone(
+  name: string,
+  afterIndex: number,
+  options?: {
+    color?: string;
+    description?: string;
+    exportAs?: 'part' | 'act' | 'section' | 'book';
+    exportTitle?: string;
+  }
+): Milestone {
+  const now = new Date().toISOString();
+  return {
+    id: createObjectId(),
+    name,
+    afterIndex,
+    color: options?.color,
+    description: options?.description,
+    exportAs: options?.exportAs,
+    exportTitle: options?.exportTitle,
     createdAt: now,
     updatedAt: now,
   };
