@@ -440,7 +440,7 @@
       <p class="empty-desc">Mark objects as "Rendered" to add them here</p>
     </div>
   {:else}
-    <!-- Thread rows - full width gray lines with colored overlay for active portion -->
+    <!-- Thread header - outside scroll -->
     {#if threadRowCount > 0}
       <div class="thread-header">
         <button class="thread-toggle" onclick={toggleThreadRows}>
@@ -448,35 +448,36 @@
           <span class="toggle-label">Threads ({threadRowCount})</span>
         </button>
       </div>
-      {#if threadRowsExpanded}
-        <div class="thread-rows" style:--thread-count={threadRowCount}>
-          {#each measuredThreads as thread, i (thread.threadId)}
-            <div class="thread-row" style:top="{i * 1.25}rem">
-              <span class="thread-label" style:--thread-color={thread.color}>{thread.name}</span>
-              <div class="thread-track">
-                <!-- Gray base line spanning full width -->
-                <div class="thread-base"></div>
-                <!-- Colored active portion -->
-                {#if thread.hasActiveSpan}
-                  <div
-                    class="thread-active"
-                    style:left="{thread.activeLeftPx}px"
-                    style:width="{thread.activeWidthPx}px"
-                    style:background={thread.color}
-                  ></div>
-                {/if}
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
     {/if}
 
-    <!-- Main flow area -->
+    <!-- Main scroll area - contains both thread rows and flow -->
     <div class="timeline-scroll" bind:this={scrollContainer}>
-      <div class="timeline-flow" bind:this={flowContainerEl}>
-        <!-- Spine - centered behind items -->
-        <div class="flow-spine"></div>
+      <div class="timeline-content" bind:this={flowContainerEl}>
+        <!-- Thread rows - inside scroll so they align with cards -->
+        {#if threadRowCount > 0 && threadRowsExpanded}
+          <div class="thread-rows" style:--thread-count={threadRowCount}>
+            {#each measuredThreads as thread, i (thread.threadId)}
+              <div class="thread-row" style:top="{i * 1.5}rem">
+                <span class="thread-label" style:--thread-color={thread.color}>{thread.name}</span>
+                <div class="thread-track">
+                  <div class="thread-base"></div>
+                  {#if thread.hasActiveSpan}
+                    <div
+                      class="thread-active"
+                      style:left="{thread.activeLeftPx}px"
+                      style:width="{thread.activeWidthPx}px"
+                      style:background={thread.color}
+                    ></div>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="timeline-flow" class:no-threads={threadRowCount === 0 || !threadRowsExpanded}>
+          <!-- Spine - behind all items -->
+          <div class="flow-spine"></div>
 
         <!-- Flow items -->
         {#each flowItems as item (item.key)}
@@ -598,6 +599,7 @@
             </div>
           {/if}
         {/each}
+        </div>
       </div>
     </div>
 
@@ -623,19 +625,34 @@
 
 <style>
   /* ============================================================================
-   * Design Tokens
+   * Design Tokens - Single Source of Truth
    * ============================================================================ */
   .timeline {
-    --card-width: 10rem;
-    --connector-padding: 0.25rem;
-    --mutation-padding: 0.125rem;
-    --milestone-padding: 0.25rem;
-    --flow-padding-x: 1rem;
-    --flow-padding-y: 0.75rem;
-    --thread-row-height: 1.25rem;
+    /* Spacing scale (4px base) */
+    --space-xs: 0.25rem;    /* 4px */
+    --space-sm: 0.5rem;     /* 8px */
+    --space-md: 0.75rem;    /* 12px */
+    --space-lg: 1rem;       /* 16px */
+    --space-xl: 1.5rem;     /* 24px */
+    --space-2xl: 2rem;      /* 32px */
+
+    /* Component sizing */
+    --card-width: 11rem;
+    --node-btn-size: 1.375rem;
+
+    /* Flow layout - THE positioning source of truth */
+    --flow-padding-x: var(--space-2xl);
+    --flow-padding-y: var(--space-lg);
+    --flow-gap: var(--space-md);  /* Gap between all flow items */
+
+    /* Thread rows */
+    --thread-row-height: 1.5rem;
+    --thread-label-width: 4.5rem;
+
+    /* Lines */
     --spine-thickness: 2px;
     --thread-thickness: 3px;
-    --spine-color: var(--border-default, #d1d5db);
+    --spine-color: var(--border-default, #e5e7eb);
   }
 
   /* ============================================================================
@@ -655,11 +672,21 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 2rem;
-    padding: 0 1rem;
+    height: 2.25rem;
+    padding: 0 var(--space-lg);
+    background: var(--surface-raised);
   }
-  .collapsed-title { font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); }
-  .collapsed-pos { font-size: 0.6875rem; color: var(--text-tertiary); }
+  .collapsed-title {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .collapsed-pos {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
 
   /* Empty state */
   .empty {
@@ -668,10 +695,20 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.25rem;
+    gap: var(--space-sm);
+    padding: var(--space-xl);
   }
-  .empty-title { font-size: 0.8125rem; font-weight: 500; color: var(--text-secondary); margin: 0; }
-  .empty-desc { font-size: 0.6875rem; color: var(--text-tertiary); margin: 0; }
+  .empty-title {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin: 0;
+  }
+  .empty-desc {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    margin: 0;
+  }
 
   /* ============================================================================
    * Thread Header - Expand/Collapse Toggle
@@ -679,44 +716,49 @@
   .thread-header {
     display: flex;
     align-items: center;
-    padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--surface-raised);
+    padding: var(--space-xs) var(--space-md);
+    background: linear-gradient(to bottom, var(--surface-raised), var(--surface-base));
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   }
 
   .thread-toggle {
     display: flex;
     align-items: center;
-    gap: 0.375rem;
-    padding: 0.25rem 0.5rem;
+    gap: var(--space-sm);
+    padding: var(--space-xs) var(--space-sm);
     font-size: 0.6875rem;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--text-secondary);
     background: transparent;
     border: none;
-    border-radius: 0.25rem;
+    border-radius: var(--space-xs);
     cursor: pointer;
+    transition: all 0.15s ease;
   }
   .thread-toggle:hover {
     background: var(--hover-bg);
     color: var(--text-primary);
   }
   .toggle-icon {
-    font-size: 0.5rem;
+    font-size: 0.5625rem;
     color: var(--text-tertiary);
+    transition: transform 0.15s ease;
   }
   .toggle-label {
     color: inherit;
+    letter-spacing: 0.01em;
   }
 
   /* ============================================================================
-   * Thread Rows - Full width with colored active overlay
+   * Thread Rows - Coordinate system matches flow exactly
    * ============================================================================ */
   .thread-rows {
     position: relative;
     height: calc(var(--thread-count, 0) * var(--thread-row-height));
     flex-shrink: 0;
-    overflow: hidden;
+    overflow: visible;
+    background: var(--surface-base);
+    padding: var(--space-xs) 0;
   }
 
   .thread-row {
@@ -729,18 +771,23 @@
   }
 
   .thread-label {
-    position: absolute;
-    left: 0.5rem;
-    font-size: 0.625rem;
+    position: sticky;
+    left: var(--space-md);
+    flex-shrink: 0;
+    width: var(--thread-label-width);
+    font-size: 0.6875rem;
     font-weight: 500;
     color: var(--thread-color);
     white-space: nowrap;
-    z-index: 2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 3;
     background: var(--surface-base);
-    padding: 0 0.25rem;
+    padding-right: var(--space-sm);
   }
 
   .thread-track {
+    /* Track spans full width - same coordinate system as flow */
     position: absolute;
     left: 0;
     right: 0;
@@ -751,18 +798,22 @@
 
   .thread-base {
     position: absolute;
-    left: var(--flow-padding-x);
-    right: var(--flow-padding-x);
+    /* Base line starts after label, ends at padding */
+    left: calc(var(--thread-label-width) + var(--space-lg));
+    right: var(--space-md);
     height: 100%;
     background: var(--spine-color);
-    border-radius: 1px;
+    border-radius: 2px;
+    opacity: 0.5;
   }
 
   .thread-active {
+    /* Active portion positioned via JS measurements - matches flow coordinates */
     position: absolute;
     height: 100%;
-    border-radius: 1px;
+    border-radius: 2px;
     z-index: 1;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05);
   }
 
   /* ============================================================================
@@ -774,13 +825,21 @@
     overflow-y: hidden;
   }
 
+  .timeline-content {
+    /* Contains both thread-rows and timeline-flow with unified coordinates */
+    display: flex;
+    flex-direction: column;
+    min-width: max-content;
+  }
+
   .timeline-flow {
     display: flex;
     flex-direction: row;
-    align-items: center; /* KEY: vertical centering */
+    align-items: center;
     padding: var(--flow-padding-y) var(--flow-padding-x);
     min-width: max-content;
     position: relative;
+    gap: var(--flow-gap);
   }
 
   /* Spine - behind all items, vertically centered */
@@ -793,6 +852,7 @@
     height: var(--spine-thickness);
     background: var(--spine-color);
     z-index: 0;
+    border-radius: 1px;
   }
 
   /* ============================================================================
@@ -809,64 +869,65 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0 var(--connector-padding);
+    padding: 0 var(--space-sm);
     position: relative;
   }
 
   .node-btn {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: var(--node-btn-size);
+    height: var(--node-btn-size);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.75rem;
-    font-weight: 600;
+    font-size: 0.8125rem;
+    font-weight: 500;
     color: var(--text-tertiary);
     background: var(--surface-base);
     border: 1.5px solid var(--spine-color);
     border-radius: 50%;
     cursor: pointer;
-    transition: all 0.1s ease;
+    transition: all 0.12s ease;
   }
   .node-btn:hover {
     color: var(--accent-primary, #3b82f6);
     border-color: var(--accent-primary, #3b82f6);
-    transform: scale(1.1);
+    background: var(--surface-raised);
+    transform: scale(1.08);
   }
   .flow-item.connector.expanded .node-btn {
     color: #fff;
     background: var(--accent-primary, #3b82f6);
     border-color: var(--accent-primary, #3b82f6);
-    transform: scale(1.1);
+    transform: scale(1.08);
   }
 
   .node-menu {
     position: absolute;
-    top: 100%;
+    top: calc(100% + var(--space-xs));
     left: 50%;
     transform: translateX(-50%);
-    margin-top: 0.375rem;
     display: flex;
     flex-direction: column;
-    gap: 0.125rem;
+    gap: 2px;
     background: var(--surface-raised);
     border: 1px solid var(--border-default);
-    border-radius: 0.375rem;
-    padding: 0.25rem;
-    box-shadow: 0 0.25rem 0.75rem rgba(0,0,0,0.12);
+    border-radius: var(--space-sm);
+    padding: var(--space-xs);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08);
     z-index: 100;
   }
   .node-menu button {
-    padding: 0.3125rem 0.625rem;
-    font-size: 0.6875rem;
+    padding: var(--space-sm) var(--space-md);
+    font-size: 0.75rem;
     font-weight: 500;
     color: var(--text-secondary);
     background: transparent;
     border: none;
-    border-radius: 0.25rem;
+    border-radius: var(--space-xs);
     cursor: pointer;
     white-space: nowrap;
     text-align: left;
+    transition: all 0.1s ease;
   }
   .node-menu button:hover {
     background: var(--hover-bg);
@@ -878,24 +939,24 @@
     position: relative;
   }
   .flow-item.card-group.stacked {
-    padding-left: 0.375rem;
+    padding-left: var(--space-sm);
   }
 
   .stack-indicator {
     position: absolute;
     left: 0;
-    top: 0;
-    bottom: 0;
-    width: 0.1875rem;
+    top: var(--space-xs);
+    bottom: var(--space-xs);
+    width: 3px;
     background: var(--accent-primary, #3b82f6);
-    border-radius: 1px;
-    opacity: 0.7;
+    border-radius: 2px;
+    opacity: 0.8;
   }
 
   .cards-column {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: var(--space-sm);
   }
 
   .card-slot {
@@ -907,45 +968,120 @@
     position: relative;
     display: flex;
     align-items: flex-start;
-    gap: 0.375rem;
-    padding: 0.5rem 0.625rem;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
     background: var(--surface-raised);
     border: 1.5px solid var(--border-subtle);
-    border-radius: 0.375rem;
+    border-radius: var(--space-sm);
     cursor: pointer;
-    transition: all 0.1s;
+    transition: all 0.12s ease;
   }
   .card:hover {
     border-color: var(--border-default);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
   }
   .card.selected {
     border-color: var(--card-color);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--card-color) 20%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--card-color) 18%, transparent);
   }
   .card.current {
     border-color: var(--accent-primary, #3b82f6);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary, #3b82f6) 15%, transparent);
   }
 
   .cursor-arrow {
     position: absolute;
-    left: calc(-0.375rem - 1.5px);
+    left: calc(-0.5rem - 1.5px);
     top: 50%;
     transform: translateY(-50%);
-    border-top: 0.25rem solid transparent;
-    border-bottom: 0.25rem solid transparent;
-    border-left: 0.375rem solid var(--accent-primary, #3b82f6);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 6px solid var(--accent-primary, #3b82f6);
   }
 
-  .card-icon { font-size: 1rem; flex-shrink: 0; line-height: 1; }
-  .card-text { display: flex; flex-direction: column; gap: 0; min-width: 0; flex: 1; }
-  .card-name { font-size: 0.75rem; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card-type { font-size: 0.625rem; color: var(--text-tertiary); }
+  .card-icon {
+    font-size: 1.125rem;
+    flex-shrink: 0;
+    line-height: 1;
+    margin-top: 1px;
+  }
+  .card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
+  }
+  .card-name {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+  .card-type {
+    font-size: 0.6875rem;
+    color: var(--text-tertiary);
+    line-height: 1.2;
+  }
 
   .card-x {
     position: absolute;
-    top: 0.25rem;
-    right: 0.25rem;
+    top: var(--space-xs);
+    right: var(--space-xs);
+    width: 1rem;
+    height: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    background: transparent;
+    border: none;
+    border-radius: var(--space-xs);
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.1s ease;
+  }
+  .card:hover .card-x { opacity: 0.6; }
+  .card-x:hover {
+    opacity: 1;
+    background: var(--error-bg);
+    color: var(--error-text);
+  }
+
+  /* Mutations below card */
+  .below-mutations {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    margin-top: var(--space-sm);
+    padding-left: 2px;
+  }
+
+  .mut-chip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: var(--space-xs) var(--space-sm);
+    font-size: 0.6875rem;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--mc) 8%, var(--surface-base));
+    border: 1px dashed color-mix(in srgb, var(--mc) 30%, var(--border-subtle));
+    border-left: 2px solid var(--mc);
+    border-radius: var(--space-xs);
+    transition: all 0.1s ease;
+  }
+  .mut-chip:hover {
+    background: color-mix(in srgb, var(--mc) 12%, var(--surface-base));
+  }
+  .mut-chip.standalone {
+    border-left-style: dashed;
+  }
+
+  .mut-x {
     width: 0.875rem;
     height: 0.875rem;
     display: flex;
@@ -955,62 +1091,24 @@
     color: var(--text-tertiary);
     background: transparent;
     border: none;
-    border-radius: 2px;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.1s;
-  }
-  .card:hover .card-x { opacity: 1; }
-  .card-x:hover { background: var(--error-bg); color: var(--error-text); }
-
-  /* Mutations below card */
-  .below-mutations {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    margin-top: 0.25rem;
-    padding-left: 0.125rem;
-  }
-
-  .mut-chip {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.1875rem 0.375rem;
-    font-size: 0.625rem;
-    color: var(--text-secondary);
-    background: color-mix(in srgb, var(--mc) 10%, var(--surface-base));
-    border: 1px dashed color-mix(in srgb, var(--mc) 35%, var(--border-subtle));
-    border-left: 2px solid var(--mc);
-    border-radius: 2px;
-  }
-  .mut-chip.standalone {
-    border-left-style: dashed;
-  }
-
-  .mut-x {
-    width: 0.75rem;
-    height: 0.75rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.5rem;
-    color: var(--text-tertiary);
-    background: transparent;
-    border: none;
-    border-radius: 2px;
+    border-radius: var(--space-xs);
     cursor: pointer;
     opacity: 0;
     margin-left: auto;
+    transition: all 0.1s ease;
   }
-  .mut-chip:hover .mut-x { opacity: 1; }
-  .mut-x:hover { background: var(--error-bg); color: var(--error-text); }
+  .mut-chip:hover .mut-x { opacity: 0.6; }
+  .mut-x:hover {
+    opacity: 1;
+    background: var(--error-bg);
+    color: var(--error-text);
+  }
 
   /* Inline mutation (between cards) */
   .flow-item.inline-mut {
     display: flex;
     align-items: center;
-    padding: 0 var(--mutation-padding);
+    padding: 0 var(--space-sm);
   }
 
   /* Milestone marker */
@@ -1018,78 +1116,92 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0 var(--milestone-padding);
+    padding: 0 var(--space-md);
     position: relative;
     cursor: pointer;
   }
 
   .ml-line {
     position: absolute;
-    top: -0.5rem;
-    bottom: -0.5rem;
+    top: calc(-1 * var(--flow-padding-y));
+    bottom: calc(-1 * var(--flow-padding-y));
     left: 50%;
     width: var(--spine-thickness);
     background: var(--ml-color);
     transform: translateX(-50%);
     z-index: -1;
+    opacity: 0.6;
   }
 
   .ml-badge {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-    padding: 0.1875rem 0.5rem;
-    font-size: 0.625rem;
+    gap: var(--space-xs);
+    padding: var(--space-xs) var(--space-md);
+    font-size: 0.6875rem;
     font-weight: 600;
     color: #fff;
     background: var(--ml-color);
-    border-radius: 0.5rem;
+    border-radius: var(--space-lg);
     z-index: 1;
     white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    transition: all 0.1s ease;
+  }
+  .ml-badge:hover {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
   }
 
   .ml-x {
-    width: 0.75rem;
-    height: 0.75rem;
+    width: 0.875rem;
+    height: 0.875rem;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.5rem;
-    color: rgba(255,255,255,0.7);
+    font-size: 0.625rem;
+    color: rgba(255, 255, 255, 0.7);
     background: transparent;
     border: none;
-    border-radius: 2px;
+    border-radius: var(--space-xs);
     cursor: pointer;
     opacity: 0;
+    transition: all 0.1s ease;
   }
-  .ml-badge:hover .ml-x { opacity: 1; }
-  .ml-x:hover { color: #fff; }
+  .ml-badge:hover .ml-x { opacity: 0.8; }
+  .ml-x:hover {
+    opacity: 1;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.15);
+  }
 
   /* Thread stripes above card */
   .thread-stripes {
     display: flex;
-    gap: 0.125rem;
-    height: 0.25rem;
-    margin-bottom: 0.1875rem;
+    gap: 2px;
+    height: 4px;
+    margin-bottom: var(--space-xs);
   }
   .thread-stripe {
     flex: 1;
-    border-radius: 1px;
-    min-width: 0.375rem;
+    border-radius: 2px;
+    min-width: var(--space-sm);
+    box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.05);
   }
 
   /* Footer */
   .timeline-footer {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    padding: 0.25rem 0.75rem;
+    justify-content: space-between;
+    padding: var(--space-sm) var(--space-lg);
     background: var(--surface-raised);
     border-top: 1px solid var(--border-subtle);
   }
   .pos-indicator {
-    font-size: 0.625rem;
+    font-size: 0.6875rem;
+    font-weight: 500;
     color: var(--text-tertiary);
     font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
   }
 </style>
