@@ -116,14 +116,39 @@
 		}
 	}
 
-	// Jump to mutation position
-	function handleJumpToMutation(position: number | undefined) {
-		if (position !== undefined) {
+	// Jump to mutation position - moves cursor to see the RESULT of the mutation
+	// on the CURRENTLY SELECTED object (not navigating to a different object).
+	//
+	// Also sets the active mutation so editing updates that mutation's content.
+	//
+	// Mutation filtering logic:
+	// - "between" mutations: `position < currentPosition` (strictly less than)
+	// - "below" mutations: `attachedPosition <= currentPosition` (less than or equal)
+	function handleJumpToMutation(mutationId: string, position: number | undefined, attachedToObjectId?: string) {
+		// Set this as the active mutation - editing will now update THIS mutation's content
+		ui.setActiveMutation(mutationId);
+
+		if (attachedToObjectId) {
+			// For 'below' mutations, find a position where the mutation is applied
+			// The filter uses `<=` so being AT the attached card's position works
+			const attachedIndex = timeline.getCardIndex(attachedToObjectId);
+			if (attachedIndex >= 0) {
+				timeline.setCursorIndex(attachedIndex);
+			}
+		} else if (position !== undefined) {
+			// For 'between' mutations, filter uses `<` (strictly less than)
+			// So we need to move cursor to a position GREATER than mutation position
 			const index = timeline.renderedObjects.findIndex(
-				(obj) => (obj.position ?? 0) >= position
+				(obj) => (obj.position ?? 0) > position
 			);
 			if (index >= 0) {
 				timeline.setCursorIndex(index);
+			} else {
+				// Mutation is after all cards - go to last card
+				const lastIndex = timeline.cardCount - 1;
+				if (lastIndex >= 0) {
+					timeline.setCursorIndex(lastIndex);
+				}
 			}
 		}
 	}
@@ -632,7 +657,6 @@
 					</CollapsibleSection>
 				{/if}
 
-				{#if !selectedObject.rendered}
 				<CollapsibleSection
 					title="Mutations"
 					badge={objectState.mutations.length + objectState.futureMutations.length || undefined}
@@ -699,6 +723,23 @@
 						</button>
 					{/if}
 
+					<!-- Always show Initial state option -->
+					<div class="mutations-list">
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<div
+							class="mutation-item initial"
+							class:active={ui.activeMutationId === null}
+							onclick={() => {
+								ui.clearActiveMutation();
+								timeline.setCursorIndex(0);
+							}}
+						>
+							<span class="mutation-position">@0</span>
+							<span class="mutation-label">Initial state</span>
+						</div>
+					</div>
+
 					{#if objectState.mutations.length > 0}
 						<div class="mutations-list">
 							<div class="mutations-group">
@@ -708,7 +749,8 @@
 									<!-- svelte-ignore a11y_no_static_element_interactions -->
 									<div
 										class="mutation-item applied"
-										onclick={() => handleJumpToMutation(mutation.position)}
+										class:active={ui.activeMutationId === mutation.id}
+										onclick={() => handleJumpToMutation(mutation.id, mutation.position, mutation.attachedToObjectId)}
 									>
 										<span class="mutation-position">
 											{#if mutation.mutationDisplay === 'below'}
@@ -742,7 +784,8 @@
 									<!-- svelte-ignore a11y_no_static_element_interactions -->
 									<div
 										class="mutation-item future"
-										onclick={() => handleJumpToMutation(mutation.position)}
+										class:active={ui.activeMutationId === mutation.id}
+										onclick={() => handleJumpToMutation(mutation.id, mutation.position, mutation.attachedToObjectId)}
 									>
 										<span class="mutation-position">
 											{#if mutation.mutationDisplay === 'below'}
@@ -767,7 +810,6 @@
 						</div>
 					{/if}
 				</CollapsibleSection>
-				{/if}
 
 				<div class="danger-zone">
 					<button class="delete-btn" onclick={handleDeleteObject}>Delete object</button>
@@ -1458,8 +1500,30 @@
 		background-color: var(--hover-bg);
 	}
 
+	.mutation-item.applied {
+		border-left: 3px solid var(--color-primary);
+	}
+
 	.mutation-item.future {
-		opacity: 0.5;
+		border-left: 3px solid var(--border-subtle);
+		border-style: dashed;
+		border-left-style: dashed;
+	}
+
+	.mutation-item.active {
+		background-color: var(--color-primary);
+		color: white;
+		border-left-color: white;
+	}
+
+	.mutation-item.active .mutation-position,
+	.mutation-item.active .mutation-label {
+		color: white;
+	}
+
+	.mutation-item.initial {
+		border-left: 3px solid var(--text-muted);
+		font-style: italic;
 	}
 
 	.mutation-position {

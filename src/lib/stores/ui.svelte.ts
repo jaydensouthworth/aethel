@@ -25,6 +25,10 @@ class UIStore {
   treeExpandedIds = $state<Set<string>>(new Set());
   propertiesPanelCollapsed = $state<boolean>(false);
 
+  // Active mutation - the mutation the user clicked to view content at that point
+  // When set, editing content updates this mutation's contentChange, not the base object
+  activeMutationId = $state<string | null>(null);
+
   // Drag state
   draggedObjectId = $state<string | null>(null);
   dropTargetId = $state<string | null>(null);
@@ -54,10 +58,28 @@ class UIStore {
 
   select(id: string | null): void {
     this.selectedObjectId = id;
+    // Clear active mutation when selecting a different object
+    this.activeMutationId = null;
   }
 
   clearSelection(): void {
     this.selectedObjectId = null;
+    this.activeMutationId = null;
+  }
+
+  /**
+   * Set the active mutation (when user clicks a mutation in properties panel)
+   * This determines which mutation's content is being edited
+   */
+  setActiveMutation(mutationId: string | null): void {
+    this.activeMutationId = mutationId;
+  }
+
+  /**
+   * Clear the active mutation
+   */
+  clearActiveMutation(): void {
+    this.activeMutationId = null;
   }
 
   // ============================================================================

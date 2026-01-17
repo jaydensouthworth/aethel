@@ -3,6 +3,7 @@
  */
 
 import type { JSONContent } from '@tiptap/core';
+export type { JSONContent } from '@tiptap/core';
 
 // ============================================================================
 // Object Types
@@ -220,7 +221,16 @@ export interface TimelinePlacement {
   // For mutations only
   mutation?: {
     label: string; // e.g., "Frodo receives Ring"
+    // Attribute changes (key-value properties)
     changes: Record<string, { from: unknown; to: unknown }>;
+    // Content change (main content field - replaces the entire content at this point)
+    contentChange?: {
+      from: JSONContent | null;
+      to: JSONContent | null;
+    };
+    // Section-specific content changes (for objects with multiple sections)
+    // Key is sectionId, value is the content change for that section
+    sectionChanges?: Record<string, { from: JSONContent | null; to: JSONContent | null }>;
   };
 
   // Editor state (persisted)
@@ -397,7 +407,14 @@ export function createPlacement(
     // Subthread targeting (section IDs when thread has sections)
     subthreadIds?: string[];
     // Mutation data
-    mutation?: { label: string; changes: Record<string, { from: unknown; to: unknown }> };
+    mutation?: {
+      label: string;
+      changes: Record<string, { from: unknown; to: unknown }>;
+      // Content change (replaces main content at this point)
+      contentChange?: { from: JSONContent | null; to: JSONContent | null };
+      // Section-specific content changes
+      sectionChanges?: Record<string, { from: JSONContent | null; to: JSONContent | null }>;
+    };
   }
 ): TimelinePlacement {
   const now = new Date().toISOString();

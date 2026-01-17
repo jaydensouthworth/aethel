@@ -90,6 +90,52 @@
   const isContentType = $derived(selectedObjectType?.isContentType ?? false);
   let lastTimelineTool = $state(timelineEditor.activeTool);
 
+  // Computed state at cursor position (includes content after mutations)
+  const objectState = $derived(
+    selectedObject ? timeline.getObjectStateAtCursor(selectedObject.id) : null
+  );
+
+  // Get the active mutation (the one the user clicked to edit)
+  const activeMutation = $derived(
+    ui.activeMutationId ? timeline.getPlacement(ui.activeMutationId) : null
+  );
+
+  // Display content depends on whether there's an active mutation
+  // If active mutation has contentChange, show that; otherwise show computed content
+  const displayContent = $derived.by(() => {
+    if (activeMutation?.mutation?.contentChange) {
+      // Active mutation has its own content - show that
+      return activeMutation.mutation.contentChange.to;
+    }
+    // No active mutation content, show computed content at cursor
+    return objectState?.computedContent ?? selectedObject?.content ?? null;
+  });
+
+  // Check if we're viewing/editing a specific mutation
+  const isEditingMutation = $derived(ui.activeMutationId !== null);
+
+  // Check if we're viewing a mutated state (different from base)
+  const isViewingMutatedState = $derived(
+    objectState && objectState.mutations.length > 0
+  );
+
+  // Handle content changes - update mutation or base object
+  function handleContentChange(newContent: unknown) {
+    if (!selectedObject) return;
+
+    if (ui.activeMutationId && activeMutation) {
+      // We're editing at a specific mutation - update that mutation's contentChange
+      const currentContent = activeMutation.mutation?.contentChange?.to ?? objectState?.computedContent ?? selectedObject.content;
+      timeline.updateMutationContent(ui.activeMutationId, {
+        from: currentContent,
+        to: newContent as typeof currentContent,
+      });
+    } else {
+      // No active mutation - update base object content
+      objects.update(selectedObject.id, { content: newContent as typeof selectedObject.content });
+    }
+  }
+
   // Section support (multiple text contexts)
   const hasSections = $derived(selectedObject?.sections && selectedObject.sections.length > 0);
   const sortedSections = $derived(
@@ -105,6 +151,13 @@
   const currentSection = $derived.by(() => {
     if (!activeSectionId || sortedSections.length === 0) return null;
     return sortedSections.find((s) => s.id === activeSectionId) ?? null;
+  });
+  // Use computed section content (with mutations applied) for display
+  const displaySectionContent = $derived.by(() => {
+    if (!activeSectionId || !objectState) return currentSection?.content ?? null;
+    // Check if there's a computed version of this section
+    const computed = objectState.computedSections[activeSectionId];
+    return computed !== undefined ? computed : currentSection?.content ?? null;
   });
 
   // Section handlers
@@ -767,15 +820,35 @@
             onRemove={handleRemoveSection}
             onRename={handleRenameSection}
           />
+          {#if isEditingMutation && activeMutation}
+            <div class="mutation-indicator editing">
+              Editing mutation: {activeMutation.mutation?.label}
+              <button class="view-initial-btn" onclick={() => ui.clearActiveMutation()}>View Initial</button>
+            </div>
+          {:else if isViewingMutatedState}
+            <div class="mutation-indicator">
+              Viewing at timeline position {timeline.cursorIndex} ({objectState?.mutations.length} mutation{objectState?.mutations.length === 1 ? '' : 's'} applied)
+            </div>
+          {/if}
           <Editor
-            content={currentSection?.content ?? null}
+            content={displaySectionContent}
             onchange={handleSectionContentChange}
             dark={theme === 'dark'}
           />
         {:else}
+          {#if isEditingMutation && activeMutation}
+            <div class="mutation-indicator editing">
+              Editing mutation: {activeMutation.mutation?.label}
+              <button class="view-initial-btn" onclick={() => ui.clearActiveMutation()}>View Initial</button>
+            </div>
+          {:else if isViewingMutatedState}
+            <div class="mutation-indicator">
+              Viewing at timeline position {timeline.cursorIndex} ({objectState?.mutations.length} mutation{objectState?.mutations.length === 1 ? '' : 's'} applied)
+            </div>
+          {/if}
           <Editor
-            content={selectedObject.content}
-            onchange={(newContent) => objects.update(selectedObject.id, { content: newContent })}
+            content={displayContent}
+            onchange={handleContentChange}
             dark={theme === 'dark'}
           />
         {/if}
@@ -1031,6 +1104,47 @@
     font-size: var(--font-size-sm);
     color: var(--text-muted);
     margin: 0;
+  }
+
+  .mutation-indicator {
+    padding: var(--space-xs) var(--space-md);
+    background-color: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--font-size-sm);
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+  }
+
+  .mutation-indicator::before {
+    content: '⏱';
+  }
+
+  .mutation-indicator.editing {
+    background-color: var(--color-primary);
+    color: white;
+    font-weight: 500;
+  }
+
+  .mutation-indicator.editing::before {
+    content: '✏️';
+  }
+
+  .view-initial-btn {
+    margin-left: auto;
+    padding: var(--space-xs) var(--space-sm);
+    background-color: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: var(--radius-sm);
+    color: white;
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+  }
+
+  .view-initial-btn:hover {
+    background-color: rgba(255, 255, 255, 0.3);
   }
 
   .timeline-resize-handle {

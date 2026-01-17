@@ -13,6 +13,7 @@ import type {
   TimelinePlacement,
   MutationDisplay,
   Milestone,
+  JSONContent,
 } from '$lib/types';
 import { createPlacement } from '$lib/types';
 import { objects } from './objects.svelte';
@@ -27,6 +28,10 @@ export interface ComputedObjectState {
   cursorIndex: number;
   mutations: TimelinePlacement[]; // Mutations applied (index <= cursor)
   computedAttributes: Record<string, unknown>;
+  // Computed content at this cursor position (base content + all content mutations applied)
+  computedContent: JSONContent | null;
+  // Computed section contents at this cursor position (sectionId -> content)
+  computedSections: Record<string, JSONContent | null>;
   futureMutations: TimelinePlacement[]; // Mutations not yet applied
 }
 
@@ -394,18 +399,21 @@ class TimelineStore {
 
   /**
    * Add a mutation that appears between cards (v2 - position-based)
+   * Supports both attribute changes and content changes
    */
   addMutationBetween(
     objectId: string,
     position: number,
     label: string,
     changes: Record<string, { from: unknown; to: unknown }>,
-    threadIds?: string[]
+    threadIds?: string[],
+    contentChange?: { from: JSONContent | null; to: JSONContent | null },
+    sectionChanges?: Record<string, { from: JSONContent | null; to: JSONContent | null }>
   ): TimelinePlacement {
     const placement = createPlacement(objectId, 'mutation', {
       mutationDisplay: 'between',
       position,
-      mutation: { label, changes },
+      mutation: { label, changes, contentChange, sectionChanges },
       threadIds,
     });
     return this.addPlacement(placement);
@@ -413,21 +421,186 @@ class TimelineStore {
 
   /**
    * Add a mutation that appears below a card (v2)
+   * Supports both attribute changes and content changes
    */
   addMutationBelow(
     objectId: string,
     attachedToObjectId: string,
     label: string,
     changes: Record<string, { from: unknown; to: unknown }>,
-    threadIds?: string[]
+    threadIds?: string[],
+    contentChange?: { from: JSONContent | null; to: JSONContent | null },
+    sectionChanges?: Record<string, { from: JSONContent | null; to: JSONContent | null }>
   ): TimelinePlacement {
     const placement = createPlacement(objectId, 'mutation', {
       mutationDisplay: 'below',
       attachedToObjectId,
-      mutation: { label, changes },
+      mutation: { label, changes, contentChange, sectionChanges },
       threadIds,
     });
     return this.addPlacement(placement);
+  }
+
+  /**
+   * Add a content-only mutation between cards
+   * Convenience method for mutations that only change content (no attributes)
+   */
+  addContentMutationBetween(
+    objectId: string,
+    position: number,
+    label: string,
+    contentChange: { from: JSONContent | null; to: JSONContent | null },
+    threadIds?: string[]
+  ): TimelinePlacement {
+    return this.addMutationBetween(objectId, position, label, {}, threadIds, contentChange);
+  }
+
+  /**
+   * Add a content-only mutation below a card
+   * Convenience method for mutations that only change content (no attributes)
+   */
+  addContentMutationBelow(
+    objectId: string,
+    attachedToObjectId: string,
+    label: string,
+    contentChange: { from: JSONContent | null; to: JSONContent | null },
+    threadIds?: string[]
+  ): TimelinePlacement {
+    return this.addMutationBelow(objectId, attachedToObjectId, label, {}, threadIds, contentChange);
+  }
+
+  /**
+   * Add a section-specific content mutation between cards
+   * For objects with multiple sections, mutate a specific section's content
+   */
+  addSectionMutationBetween(
+    objectId: string,
+    position: number,
+    label: string,
+    sectionId: string,
+    contentChange: { from: JSONContent | null; to: JSONContent | null },
+    threadIds?: string[]
+  ): TimelinePlacement {
+    return this.addMutationBetween(objectId, position, label, {}, threadIds, undefined, {
+      [sectionId]: contentChange,
+    });
+  }
+
+  /**
+   * Update an existing mutation's content change
+   */
+  updateMutationContent(
+    placementId: string,
+    contentChange: { from: JSONContent | null; to: JSONContent | null }
+  ): void {
+    const placement = this.getPlacement(placementId);
+    if (!placement?.mutation) return;
+
+    this.updatePlacement(placementId, {
+      mutation: {
+        ...placement.mutation,
+        contentChange,
+      },
+    });
+  }
+
+  /**
+   * Update an existing mutation's section changes
+   */
+  updateMutationSectionChanges(
+    placementId: string,
+    sectionChanges: Record<string, { from: JSONContent | null; to: JSONContent | null }>
+  ): void {
+    const placement = this.getPlacement(placementId);
+    if (!placement?.mutation) return;
+
+    this.updatePlacement(placementId, {
+      mutation: {
+        ...placement.mutation,
+        sectionChanges: {
+          ...placement.mutation.sectionChanges,
+          ...sectionChanges,
+        },
+      },
+    });
+  }
+
+  /**
+   * Get the effective content for an object at a specific position
+   * Useful for previewing content at any timeline position
+   */
+  getContentAtPosition(objectId: string, position: number): JSONContent | null {
+    const obj = objects.get(objectId);
+    if (!obj) return null;
+
+    // Start with base content
+    let content: JSONContent | null = obj.content;
+
+    // Get all content mutations before this position, sorted by position
+    const contentMutations = this.getPlacementsForObject(objectId)
+      .filter((p) => {
+        if (p.type !== 'mutation') return false;
+        if (!p.mutation?.contentChange) return false;
+        const mutPos = p.position ?? 0;
+        return mutPos < position;
+      })
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+    // Apply mutations in order
+    for (const mutation of contentMutations) {
+      if (mutation.mutation?.contentChange) {
+        content = mutation.mutation.contentChange.to;
+      }
+    }
+
+    return content;
+  }
+
+  /**
+   * Get content history for an object (all content mutations)
+   * Returns array of { position, content, label } sorted by position
+   */
+  getContentHistory(objectId: string): Array<{
+    position: number;
+    content: JSONContent | null;
+    label: string;
+    placementId: string;
+  }> {
+    const obj = objects.get(objectId);
+    const history: Array<{
+      position: number;
+      content: JSONContent | null;
+      label: string;
+      placementId: string;
+    }> = [];
+
+    // Add base content as position 0
+    if (obj) {
+      history.push({
+        position: 0,
+        content: obj.content,
+        label: 'Initial',
+        placementId: '',
+      });
+    }
+
+    // Add all content mutations
+    const contentMutations = this.getPlacementsForObject(objectId)
+      .filter((p) => p.type === 'mutation' && p.mutation?.contentChange)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+    for (const mutation of contentMutations) {
+      if (mutation.mutation?.contentChange) {
+        history.push({
+          position: mutation.position ?? 0,
+          content: mutation.mutation.contentChange.to,
+          label: mutation.mutation.label,
+          placementId: mutation.id,
+        });
+      }
+    }
+
+    return history;
   }
 
   /**
@@ -544,11 +717,17 @@ class TimelineStore {
   /**
    * Get the computed state of an object at the current cursor position
    * In v2, this considers mutations up to and including the current cursor position
+   *
+   * This includes:
+   * - computedAttributes: attribute values after applying all mutations up to cursor
+   * - computedContent: content after applying all content mutations up to cursor
+   * - computedSections: section contents after applying all section mutations up to cursor
    */
   getObjectStateAtCursor(objectId: string): ComputedObjectState {
     const currentIndex = this.cursorIndex;
     const currentPosition = this.getPositionForIndex(currentIndex);
     const objectPlacements = this.getPlacementsForObject(objectId);
+    const obj = objects.get(objectId);
 
     // For v2 model: filter mutations based on their position relative to cursor
     const relevantMutations = objectPlacements
@@ -573,11 +752,38 @@ class TimelineStore {
         return aPos - bPos;
       });
 
+    // Compute attributes by applying all mutations in order
     const computedAttributes: Record<string, unknown> = {};
     for (const mutation of relevantMutations) {
       if (mutation.mutation?.changes) {
         for (const [key, change] of Object.entries(mutation.mutation.changes)) {
           computedAttributes[key] = change.to;
+        }
+      }
+    }
+
+    // Compute content by applying all content mutations in order
+    // Start with base object content
+    let computedContent: JSONContent | null = obj?.content ?? null;
+
+    // Initialize computed sections from base object sections
+    const computedSections: Record<string, JSONContent | null> = {};
+    if (obj?.sections) {
+      for (const section of obj.sections) {
+        computedSections[section.id] = section.content;
+      }
+    }
+
+    // Apply content mutations in order
+    for (const mutation of relevantMutations) {
+      // Apply main content change if present
+      if (mutation.mutation?.contentChange) {
+        computedContent = mutation.mutation.contentChange.to;
+      }
+      // Apply section-specific content changes if present
+      if (mutation.mutation?.sectionChanges) {
+        for (const [sectionId, change] of Object.entries(mutation.mutation.sectionChanges)) {
+          computedSections[sectionId] = change.to;
         }
       }
     }
@@ -607,6 +813,8 @@ class TimelineStore {
       cursorIndex: currentIndex,
       mutations: relevantMutations,
       computedAttributes,
+      computedContent,
+      computedSections,
       futureMutations,
     };
   }

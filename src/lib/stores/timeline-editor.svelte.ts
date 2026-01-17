@@ -208,9 +208,11 @@ class TimelineEditorStore {
 
   /**
    * Clear card selection
+   * Also resets cursor to 0 (initial state) since cursor = selection
    */
   clearCardSelection(): void {
     this.selectedCardId = null;
+    timeline.setCursorIndex(0); // Reset to initial state
   }
 
   /**
@@ -251,10 +253,12 @@ class TimelineEditorStore {
 
   /**
    * Clear all selection (cards and mutations)
+   * Also resets cursor to 0 (initial state) since cursor = selection
    */
   clearAllSelection(): void {
     this.selectedCardId = null;
     this.selectedMutationIds = new Set();
+    timeline.setCursorIndex(0); // Reset to initial state
   }
 
   /**
