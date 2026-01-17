@@ -359,9 +359,10 @@
     };
 
     // Scenes - parented under Scenes folder
+    // "Bilbo's Adventure" is a prologue/flashback - comes first
     const scene1 = createObject("Bilbo's Adventure", 'scene', scenesFolder.id);
     scene1.rendered = true;
-    scene1.position = 4000;
+    scene1.position = 500; // Prologue - before Chapter 1
     scene1.content = {
       type: 'doc',
       content: [

@@ -291,16 +291,20 @@ class TimelineEditorStore {
 
   /**
    * Show a thread
+   * Note: We reassign the Set to ensure Svelte 5 reactivity triggers
    */
   showThread(threadId: string): void {
-    this.visibleThreadIds.add(threadId);
+    this.visibleThreadIds = new Set([...this.visibleThreadIds, threadId]);
   }
 
   /**
    * Hide a thread
+   * Note: We reassign the Set to ensure Svelte 5 reactivity triggers
    */
   hideThread(threadId: string): void {
-    this.visibleThreadIds.delete(threadId);
+    const newSet = new Set(this.visibleThreadIds);
+    newSet.delete(threadId);
+    this.visibleThreadIds = newSet;
   }
 
   /**
@@ -308,9 +312,9 @@ class TimelineEditorStore {
    */
   toggleThreadVisibility(threadId: string): void {
     if (this.visibleThreadIds.has(threadId)) {
-      this.visibleThreadIds.delete(threadId);
+      this.hideThread(threadId);
     } else {
-      this.visibleThreadIds.add(threadId);
+      this.showThread(threadId);
     }
   }
 

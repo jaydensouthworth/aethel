@@ -183,6 +183,38 @@
             key: `conn-${lastCardPos}`,
             dropPosition: timeline.getPositionBetween(lastCardPos, nextNonGroupItem?.position ?? null)
           });
+        } else {
+          // Fallback: if slotGroups lookup fails (can happen during reactivity updates),
+          // create a minimal single-card group to avoid missing cards
+          processedCardIds.add(item.item.id);
+
+          // Find the card object in the cards array for mutationsBelow
+          const cardObj = cards.find(c => c.object.id === item.item.id);
+          const fallbackGroup: SlotGroup = {
+            slotId: `card-${item.item.id}`,
+            cards: cardObj ? [cardObj] : [{
+              index: 0,
+              object: item.item,
+              placement: null,
+              mutationsBelow: []
+            }],
+            visualPosition: 0
+          };
+
+          items.push({
+            type: 'card-group',
+            key: `group-${fallbackGroup.slotId}`,
+            slotId: fallbackGroup.slotId,
+            group: fallbackGroup,
+            position: item.position
+          });
+
+          // Connector after this card
+          items.push({
+            type: 'connector',
+            key: `conn-${item.position}`,
+            dropPosition: timeline.getPositionBetween(item.position, nextItem?.position ?? null)
+          });
         }
       } else if (item.type === 'milestone') {
         items.push({
@@ -228,6 +260,34 @@
     }
 
     return dedupedItems;
+  });
+
+  // ============================================================================
+  // Reset component state when data changes drastically (e.g., New Project)
+  // ============================================================================
+
+  // Track previous object count to detect major changes
+  let prevObjectCount = $state(0);
+
+  $effect(() => {
+    const currentCount = objects.all.length;
+    // Detect if stores were cleared and repopulated (or just cleared)
+    if (prevObjectCount > 0 && currentCount === 0) {
+      // Stores are being cleared - reset local state
+      cardGroupEls = new Map();
+      expandedConnectorKey = null;
+      draggedId = null;
+      dragType = null;
+      dropTargetConnectorKey = null;
+      dropTargetObjectId = null;
+      mutationDropDialogOpen = false;
+      cardDropDialogOpen = false;
+      milestoneDialogOpen = false;
+      mutationDialogOpen = false;
+      addExistingObjectDialogOpen = false;
+      createNewObjectDialogOpen = false;
+    }
+    prevObjectCount = currentCount;
   });
 
   // ============================================================================
@@ -723,42 +783,10 @@
     <!-- Timeline header with undo/redo -->
     <TimelineHeader />
 
-    <!-- Thread header - outside scroll -->
-    {#if threadRowCount > 0}
-      <div class="thread-header">
-        <button class="thread-toggle" onclick={toggleThreadRows}>
-          <span class="toggle-icon">{threadRowsExpanded ? '▼' : '▶'}</span>
-          <span class="toggle-label">Threads ({threadRowCount})</span>
-        </button>
-      </div>
-    {/if}
-
-    <!-- Main scroll area - contains both thread rows and flow -->
+    <!-- Main scroll area - contains flow and thread rows -->
     <div class="timeline-scroll" bind:this={scrollContainer}>
       <div class="timeline-content" bind:this={flowContainerEl}>
-        <!-- Thread rows - inside scroll so they align with cards -->
-        {#if threadRowCount > 0 && threadRowsExpanded}
-          <div class="thread-rows" style:--thread-count={threadRowCount}>
-            {#each measuredThreads as thread, i (thread.threadId)}
-              <div class="thread-row" style:top="{i * 1.5}rem">
-                <span class="thread-label" style:--thread-color={thread.color}>{thread.name}</span>
-                <div class="thread-track">
-                  <div class="thread-base"></div>
-                  {#if thread.hasActiveSpan}
-                    <div
-                      class="thread-active"
-                      style:left="{thread.activeLeftPx}px"
-                      style:width="{thread.activeWidthPx}px"
-                      style:background={thread.color}
-                    ></div>
-                  {/if}
-                </div>
-              </div>
-            {/each}
-          </div>
-        {/if}
-
-        <div class="timeline-flow" class:no-threads={threadRowCount === 0 || !threadRowsExpanded}>
+        <div class="timeline-flow">
           <!-- Spine - behind all items -->
           <div class="flow-spine"></div>
 
@@ -927,6 +955,38 @@
           {/if}
         {/each}
         </div>
+
+        <!-- Thread section - at bottom -->
+        {#if threadRowCount > 0}
+          <div class="thread-header">
+            <button class="thread-toggle" onclick={toggleThreadRows}>
+              <span class="toggle-icon">{threadRowsExpanded ? '▼' : '▶'}</span>
+              <span class="toggle-label">Threads ({threadRowCount})</span>
+            </button>
+          </div>
+        {/if}
+
+        <!-- Thread rows - inside scroll so they align with cards -->
+        {#if threadRowCount > 0 && threadRowsExpanded}
+          <div class="thread-rows" style:--thread-count={threadRowCount}>
+            {#each measuredThreads as thread, i (thread.threadId)}
+              <div class="thread-row" style:top="{i * 1.5}rem">
+                <span class="thread-label" style:--thread-color={thread.color}>{thread.name}</span>
+                <div class="thread-track">
+                  <div class="thread-base"></div>
+                  {#if thread.hasActiveSpan}
+                    <div
+                      class="thread-active"
+                      style:left="{thread.activeLeftPx}px"
+                      style:width="{thread.activeWidthPx}px"
+                      style:background={thread.color}
+                    ></div>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     </div>
 
@@ -1075,8 +1135,9 @@
     display: flex;
     align-items: center;
     padding: var(--space-xs) var(--space-md);
-    background: linear-gradient(to bottom, var(--surface-raised), var(--surface-base));
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    margin-top: var(--space-sm);
+    border-top: 1px solid var(--border-subtle);
+    background: var(--surface-base);
   }
 
   .thread-toggle {
