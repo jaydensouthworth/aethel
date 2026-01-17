@@ -266,8 +266,11 @@
     const itemsFolder = createObject('Items', 'folder');
     itemsFolder.color = '#f59e0b'; // amber - matches item type
 
+    const threadsFolder = createObject('Threads', 'folder');
+    threadsFolder.color = '#8b5cf6'; // purple for narrative threads
+
     // Add folders first
-    [chaptersFolder, scenesFolder, charactersFolder, locationsFolder, itemsFolder].forEach(
+    [chaptersFolder, scenesFolder, charactersFolder, locationsFolder, itemsFolder, threadsFolder].forEach(
       (folder) => objects.add(folder)
     );
 
@@ -452,19 +455,23 @@
     );
 
     // Expand all folders by default
-    [chaptersFolder, scenesFolder, charactersFolder, locationsFolder, itemsFolder].forEach(
+    [chaptersFolder, scenesFolder, charactersFolder, locationsFolder, itemsFolder, threadsFolder].forEach(
       (folder) => ui.setTreeExpanded(folder.id, true)
     );
 
     // Create thread objects (narrative arcs are now AethelObjects with isThread=true)
-    const ringThread = createObject("The Ring's Journey", 'folder');
+    // Threads are chapter type (content type) so they can have sections/subthreads
+    // They are not rendered as cards, just used as threads
+    const ringThread = createObject("The Ring's Journey", 'chapter', threadsFolder.id);
     ringThread.isThread = true;
+    ringThread.rendered = false;
     ringThread.threadColor = '#f59e0b';
     ringThread.color = '#f59e0b';
     objects.add(ringThread);
 
-    const frodoThread = createObject("Frodo's Arc", 'folder');
+    const frodoThread = createObject("Frodo's Arc", 'chapter', threadsFolder.id);
     frodoThread.isThread = true;
+    frodoThread.rendered = false;
     frodoThread.threadColor = '#3b82f6';
     frodoThread.color = '#3b82f6';
     // Add subthreads (sections) to Frodo's Arc

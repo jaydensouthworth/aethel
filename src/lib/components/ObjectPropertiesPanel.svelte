@@ -248,30 +248,67 @@
 		expandedCardIds = newSet;
 	}
 
-	// Get subthread targeting for a card
-	function getCardSubthreads(cardId: string): string[] {
-		if (!selectedObject) return [];
-		const placements = timeline.getPlacementsForObject(cardId);
-		for (const p of placements) {
-			if (p.threadIds?.includes(selectedObject.id)) {
-				return p.subthreadIds ?? [];
+	// Get the placement that associates a card with the current thread (read-only, no side effects)
+	function findCardThreadPlacement(cardId: string): { placementId: string; subthreadIds: string[]; needsPromotion: boolean } | null {
+		if (!selectedObject) return null;
+		const threadId = selectedObject.id;
+
+		// First check the card's own placements
+		const cardPlacements = timeline.getPlacementsForObject(cardId);
+		for (const p of cardPlacements) {
+			if (p.threadIds?.includes(threadId)) {
+				return { placementId: p.id, subthreadIds: p.subthreadIds ?? [], needsPromotion: false };
 			}
 		}
-		return [];
+
+		// Card's own placements don't have this threadId
+		// Check if the card is in the thread via mutations attached to it
+		const creationPlacement = cardPlacements.find(p => p.type === 'creation');
+		if (creationPlacement) {
+			const isInThreadViaMutation = timeline.allPlacements.some(p =>
+				p.mutationDisplay === 'below' &&
+				p.attachedToObjectId === cardId &&
+				p.threadIds?.includes(threadId)
+			);
+
+			if (isInThreadViaMutation) {
+				// Card needs to be "promoted" to direct membership before subthread targeting works
+				return { placementId: creationPlacement.id, subthreadIds: [], needsPromotion: true };
+			}
+		}
+
+		return null;
+	}
+
+	// Ensure card has direct thread membership (call this before modifying subthreads)
+	function ensureDirectThreadMembership(cardId: string): string | null {
+		if (!selectedObject) return null;
+		const result = findCardThreadPlacement(cardId);
+		if (!result) return null;
+
+		if (result.needsPromotion) {
+			// Promote to direct membership
+			timeline.addPlacementToThread(result.placementId, selectedObject.id);
+		}
+		return result.placementId;
+	}
+
+	// Get subthread targeting for a card (read-only, safe for templates)
+	function getCardSubthreads(cardId: string): string[] {
+		const result = findCardThreadPlacement(cardId);
+		return result?.subthreadIds ?? [];
 	}
 
 	// Toggle a specific subthread for a card
 	function toggleSubthreadForCard(cardId: string, sectionId: string) {
-		if (!selectedObject) return;
-		const placements = timeline.getPlacementsForObject(cardId);
-		const placement = placements.find(p => p.threadIds?.includes(selectedObject.id));
-		if (!placement) return;
+		const placementId = ensureDirectThreadMembership(cardId);
+		if (!placementId) return;
 
-		const currentSubthreads = placement.subthreadIds ?? [];
+		const currentSubthreads = getCardSubthreads(cardId);
 		if (currentSubthreads.includes(sectionId)) {
-			timeline.removeSubthreadFromPlacement(placement.id, sectionId);
+			timeline.removeSubthreadFromPlacement(placementId, sectionId);
 		} else {
-			timeline.addSubthreadToPlacement(placement.id, sectionId);
+			timeline.addSubthreadToPlacement(placementId, sectionId);
 		}
 	}
 
@@ -287,11 +324,9 @@
 
 	// Set card to target full thread (clear subthread targeting)
 	function setCardToFullThread(cardId: string) {
-		if (!selectedObject) return;
-		const placements = timeline.getPlacementsForObject(cardId);
-		const placement = placements.find(p => p.threadIds?.includes(selectedObject.id));
-		if (placement) {
-			timeline.clearSubthreadTargeting(placement.id);
+		const placementId = ensureDirectThreadMembership(cardId);
+		if (placementId) {
+			timeline.clearSubthreadTargeting(placementId);
 		}
 	}
 </script>
@@ -484,17 +519,20 @@
 											</div>
 											{#if hasSubthreads && isExpanded}
 												<div class="subthread-options">
-													<label class="subthread-option">
+													<label class="subthread-option full-thread-option" class:active={isFullThread}>
 														<input
-															type="radio"
-															name="subthread-{card.id}"
+															type="checkbox"
 															checked={isFullThread}
 															onchange={() => setCardToFullThread(card.id)}
 														/>
-														<span>Full thread</span>
+														<span>All subthreads</span>
+														<span class="option-hint">(default)</span>
 													</label>
+													<div class="subthread-divider">
+														<span>or specific subthreads:</span>
+													</div>
 													{#each threadSections as section (section.id)}
-														<label class="subthread-option">
+														<label class="subthread-option specific-option" class:active={cardTargetsSubthread(card.id, section.id)}>
 															<input
 																type="checkbox"
 																checked={cardTargetsSubthread(card.id, section.id)}
@@ -1150,6 +1188,40 @@
 		width: 14px;
 		height: 14px;
 		flex-shrink: 0;
+	}
+
+	.subthread-option.active {
+		color: var(--text-primary);
+		font-weight: 500;
+	}
+
+	.subthread-option.full-thread-option {
+		padding-bottom: var(--space-xs);
+	}
+
+	.option-hint {
+		font-size: var(--font-size-xs);
+		color: var(--text-muted);
+		font-weight: 400;
+	}
+
+	.subthread-divider {
+		display: flex;
+		align-items: center;
+		gap: var(--space-sm);
+		padding: var(--space-xs) 0;
+		margin-bottom: var(--space-xs);
+	}
+
+	.subthread-divider span {
+		font-size: var(--font-size-xs);
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+	}
+
+	.subthread-option.specific-option {
+		padding-left: var(--space-sm);
 	}
 
 	/* Aliases Section */

@@ -350,14 +350,13 @@ class TimelineStore {
     id: string,
     updates: Partial<Omit<TimelinePlacement, 'id' | 'createdAt'>>
   ): void {
-    const index = this.allPlacements.findIndex((p) => p.id === id);
-    if (index !== -1) {
-      this.allPlacements[index] = {
-        ...this.allPlacements[index],
-        ...updates,
-        updatedAt: new Date().toISOString(),
-      };
-    }
+    // Use map + reassignment to ensure Svelte 5 reactivity triggers
+    // Index assignment can sometimes not propagate to derived values
+    this.allPlacements = this.allPlacements.map((p) =>
+      p.id === id
+        ? { ...p, ...updates, updatedAt: new Date().toISOString() }
+        : p
+    );
   }
 
   removePlacement(id: string): void {

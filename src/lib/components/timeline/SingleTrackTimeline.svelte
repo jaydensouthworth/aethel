@@ -302,24 +302,92 @@
   let threadRowsExpanded = $state(true);
 
   // Which slot IDs have threads (for determining if we need thread rows)
+  // Also tracks subthread membership: key format "threadId:sectionId" for specific subthreads
   const threadSlotMap = $derived.by(() => {
+    // Read allPlacements directly to ensure we always have fresh placement data
+    // This is critical for reactivity - reading from cached card.placement may be stale
+    const allPlacements = timeline.allPlacements;
+
+    // Helper to get fresh placement data
+    const getPlacement = (objectId: string, type: 'creation' | 'mutation' = 'creation') =>
+      allPlacements.find(p => p.objectId === objectId && p.type === type);
+
+    const getMutationsBelow = (attachedToObjectId: string) =>
+      allPlacements.filter(p => p.type === 'mutation' && p.mutationDisplay === 'below' && p.attachedToObjectId === attachedToObjectId);
+
     const map = new Map<string, Set<string>>(); // slotId -> Set of threadIds
+    const subthreadMap = new Map<string, Set<string>>(); // slotId -> Set of "threadId:sectionId"
+
     for (const group of slotGroups) {
       const threadIds = new Set<string>();
+      const subthreadKeys = new Set<string>();
+      // Track which threadIds have subthread targeting defined on the card's creation placement
+      // For these, we should NOT also check mutations (card's targeting takes precedence)
+      const threadsWithCardTargeting = new Set<string>();
+
       for (const card of group.cards) {
+        // Get FRESH placement data directly from allPlacements
+        const placement = getPlacement(card.object.id, 'creation');
+        const mutationsBelow = getMutationsBelow(card.object.id);
+
         // Check the card's own placement (creation/reference) for thread membership
-        if (card.placement?.threadIds) {
-          for (const threadId of card.placement.threadIds) {
+        if (placement?.threadIds) {
+          for (const threadId of placement.threadIds) {
             if (timelineEditor.isThreadVisible(threadId)) {
               threadIds.add(threadId);
+              // Card has direct thread membership - its subthread targeting takes precedence
+              threadsWithCardTargeting.add(threadId);
+
+              // Track subthread membership based on card's targeting
+              const threadObj = objects.get(threadId);
+              const sections = threadObj ? objects.getSections(threadId) : [];
+              const placementSubthreads = placement.subthreadIds ?? [];
+
+              if (sections.length > 0) {
+                if (placementSubthreads.length === 0) {
+                  // "Full thread" - card belongs to ALL subthreads
+                  for (const section of sections) {
+                    subthreadKeys.add(`${threadId}:${section.id}`);
+                  }
+                } else {
+                  // Specific subthreads only
+                  for (const sectionId of placementSubthreads) {
+                    subthreadKeys.add(`${threadId}:${sectionId}`);
+                  }
+                }
+              }
             }
           }
         }
-        // Also check mutations below the card
-        for (const mutation of card.mutationsBelow) {
+
+        // Also check mutations below the card for thread membership
+        // But for SUBTHREAD targeting, only use mutations if the card doesn't have
+        // direct targeting for this thread (card's targeting takes precedence)
+        for (const mutation of mutationsBelow) {
           for (const threadId of mutation.threadIds ?? []) {
             if (timelineEditor.isThreadVisible(threadId)) {
               threadIds.add(threadId);
+
+              // Only use mutation's subthread targeting if card doesn't have direct targeting for this thread
+              if (!threadsWithCardTargeting.has(threadId)) {
+                const threadObj = objects.get(threadId);
+                const sections = threadObj ? objects.getSections(threadId) : [];
+                const mutationSubthreads = mutation.subthreadIds ?? [];
+
+                if (sections.length > 0) {
+                  if (mutationSubthreads.length === 0) {
+                    // "Full thread" - belongs to ALL subthreads
+                    for (const section of sections) {
+                      subthreadKeys.add(`${threadId}:${section.id}`);
+                    }
+                  } else {
+                    // Specific subthreads only
+                    for (const sectionId of mutationSubthreads) {
+                      subthreadKeys.add(`${threadId}:${sectionId}`);
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -327,8 +395,11 @@
       if (threadIds.size > 0) {
         map.set(group.slotId, threadIds);
       }
+      if (subthreadKeys.size > 0) {
+        subthreadMap.set(group.slotId, subthreadKeys);
+      }
     }
-    return map;
+    return { threads: map, subthreads: subthreadMap };
   });
 
   // Visible thread info (for rendering thread rows)
@@ -349,12 +420,14 @@
 
   const visibleThreads = $derived.by(() => {
     const threads: ThreadInfo[] = [];
+    const { threads: threadMap, subthreads: subthreadMap } = threadSlotMap;
+
     for (const threadId of timelineEditor.visibleThreadIds) {
       const threadObj = objects.get(threadId);
       if (!threadObj?.isThread) continue;
 
       const slotIds: string[] = [];
-      for (const [slotId, threadIds] of threadSlotMap) {
+      for (const [slotId, threadIds] of threadMap) {
         if (threadIds.has(threadId)) {
           slotIds.push(slotId);
         }
@@ -364,14 +437,24 @@
       const sections = objects.getSections(threadId);
       const hasSubthreads = sections.length > 0;
 
-      // Build subthread info for each section
-      const subthreads: SubthreadInfo[] = sections.map(section => ({
-        sectionId: section.id,
-        name: section.name,
-        // For now, subthreads inherit parent's slot coverage
-        // Future: filter by subthreadIds on placements
-        slotIds: [...slotIds],
-      }));
+      // Build subthread info for each section with its own slot coverage
+      const subthreads: SubthreadInfo[] = sections.map(section => {
+        const subthreadKey = `${threadId}:${section.id}`;
+        const subthreadSlotIds: string[] = [];
+
+        // Find slots where this specific subthread has cards
+        for (const [slotId, subthreadKeys] of subthreadMap) {
+          if (subthreadKeys.has(subthreadKey)) {
+            subthreadSlotIds.push(slotId);
+          }
+        }
+
+        return {
+          sectionId: section.id,
+          name: section.name,
+          slotIds: subthreadSlotIds,
+        };
+      });
 
       // Include thread even if no slots - it will show as inactive
       threads.push({
@@ -396,58 +479,89 @@
     hasActiveSpan: boolean; // Whether there's an active colored portion
   }
 
+  interface MeasuredSubthread {
+    threadId: string;
+    sectionId: string;
+    activeLeftPx: number;
+    activeWidthPx: number;
+    hasActiveSpan: boolean;
+  }
+
   let measuredThreads = $state<MeasuredThread[]>([]);
+  let measuredSubthreads = $state<MeasuredSubthread[]>([]);
   let totalFlowWidth = $state(0);
+
+  function measureSpanFromSlotIds(slotIds: string[], containerRect: DOMRect, scrollLeft: number): { left: number; width: number; hasSpan: boolean } {
+    if (slotIds.length === 0) {
+      return { left: 0, width: 0, hasSpan: false };
+    }
+
+    // Get first and last card group elements
+    const firstEl = cardGroupEls.get(slotIds[0]);
+    const lastEl = cardGroupEls.get(slotIds[slotIds.length - 1]);
+    if (!firstEl || !lastEl) {
+      return { left: 0, width: 0, hasSpan: false };
+    }
+
+    const firstRect = firstEl.getBoundingClientRect();
+    const lastRect = lastEl.getBoundingClientRect();
+
+    return {
+      left: firstRect.left - containerRect.left + scrollLeft,
+      width: lastRect.right - firstRect.left,
+      hasSpan: true,
+    };
+  }
 
   function measureThreadPositions() {
     if (!flowContainerEl) return;
 
     const threads: MeasuredThread[] = [];
+    const subthreads: MeasuredSubthread[] = [];
     const containerRect = flowContainerEl.getBoundingClientRect();
     const scrollLeft = flowContainerEl.scrollLeft;
     totalFlowWidth = flowContainerEl.scrollWidth;
 
     for (const thread of visibleThreads) {
-      if (thread.slotIds.length === 0) {
-        // No active cards for this thread - show as inactive
-        threads.push({
-          threadId: thread.threadId,
-          color: thread.color,
-          name: thread.name,
-          activeLeftPx: 0,
-          activeWidthPx: 0,
-          hasActiveSpan: false,
-        });
-        continue;
-      }
-
-      // Get first and last card group elements
-      const firstEl = cardGroupEls.get(thread.slotIds[0]);
-      const lastEl = cardGroupEls.get(thread.slotIds[thread.slotIds.length - 1]);
-      if (!firstEl || !lastEl) continue;
-
-      const firstRect = firstEl.getBoundingClientRect();
-      const lastRect = lastEl.getBoundingClientRect();
-
-      // Measure full card width (left edge to right edge)
+      // Measure parent thread span
+      const threadSpan = measureSpanFromSlotIds(thread.slotIds, containerRect, scrollLeft);
       threads.push({
         threadId: thread.threadId,
         color: thread.color,
         name: thread.name,
-        activeLeftPx: firstRect.left - containerRect.left + scrollLeft,
-        activeWidthPx: lastRect.right - firstRect.left,
-        hasActiveSpan: true,
+        activeLeftPx: threadSpan.left,
+        activeWidthPx: threadSpan.width,
+        hasActiveSpan: threadSpan.hasSpan,
       });
+
+      // Measure each subthread span independently
+      for (const sub of thread.subthreads) {
+        const subSpan = measureSpanFromSlotIds(sub.slotIds, containerRect, scrollLeft);
+        subthreads.push({
+          threadId: thread.threadId,
+          sectionId: sub.sectionId,
+          activeLeftPx: subSpan.left,
+          activeWidthPx: subSpan.width,
+          hasActiveSpan: subSpan.hasSpan,
+        });
+      }
     }
 
     measuredThreads = threads;
+    measuredSubthreads = subthreads;
   }
 
   // Recalculate thread positions when layout changes
   $effect(() => {
     // Dependencies: trigger recalc when these change
-    visibleThreads;
-    flowItems;
+    // Must actually access properties to ensure Svelte tracks the dependency
+    const _threadCount = visibleThreads.length;
+    const _flowCount = flowItems.length;
+    // Also track subthread slot changes by accessing the subthreads array
+    const _subthreadSlotCount = visibleThreads.reduce(
+      (acc, t) => acc + t.subthreads.reduce((a, s) => a + s.slotIds.length, 0),
+      0
+    );
     // Delay to allow DOM update
     requestAnimationFrame(() => measureThreadPositions());
   });
@@ -1030,6 +1144,7 @@
               row: number;
               thread: typeof visibleThreads[0];
               measured: typeof measuredThreads[0] | undefined;
+              measuredSub?: typeof measuredSubthreads[0] | undefined;
               subthread?: SubthreadInfo;
             }> = [];
             let row = 0;
@@ -1039,6 +1154,9 @@
               row++;
               if (thread.hasSubthreads && timelineEditor.isThreadExpanded(thread.threadId)) {
                 for (const sub of thread.subthreads) {
+                  const measuredSub = measuredSubthreads.find(
+                    m => m.threadId === thread.threadId && m.sectionId === sub.sectionId
+                  );
                   positions.push({
                     type: 'subthread',
                     threadId: thread.threadId,
@@ -1046,6 +1164,7 @@
                     row,
                     thread,
                     measured,
+                    measuredSub,
                     subthread: sub
                   });
                   row++;
@@ -1083,18 +1202,18 @@
                   </div>
                 </div>
               {:else}
-                <!-- Subthread row (indented) -->
+                <!-- Subthread row (indented) - uses its own measured span -->
                 <div class="thread-row subthread-row" style:top="{pos.row * 1.5}rem">
                   <span class="thread-label subthread-label" style:--thread-color={pos.thread.color}>
                     {pos.subthread?.name}
                   </span>
                   <div class="thread-track">
                     <div class="thread-base subthread-base"></div>
-                    {#if pos.measured?.hasActiveSpan}
+                    {#if pos.measuredSub?.hasActiveSpan}
                       <div
                         class="thread-active subthread-active"
-                        style:left="{pos.measured.activeLeftPx}px"
-                        style:width="{pos.measured.activeWidthPx}px"
+                        style:left="{pos.measuredSub.activeLeftPx}px"
+                        style:width="{pos.measuredSub.activeWidthPx}px"
                         style:background={pos.thread.color}
                       ></div>
                     {/if}
