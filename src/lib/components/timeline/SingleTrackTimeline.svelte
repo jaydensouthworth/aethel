@@ -3,8 +3,9 @@
   import { getObjectType } from '$lib/types';
   import type { TimelinePlacement, Milestone } from '$lib/types';
   import type { TimelineCard } from '$lib/stores/timeline.svelte';
-  import { deleteMilestone, deletePlacement, toggleCardRendered } from '$lib/services/timeline-operations';
-  import { MilestoneDialog, AddMutationDialog } from './dialogs';
+  import { deleteMilestone, deletePlacement, toggleCardRendered, reorderCard, moveMutation, duplicateMutation, moveMilestone } from '$lib/services/timeline-operations';
+  import { MilestoneDialog, AddMutationDialog, AddExistingObjectDialog, CreateNewObjectDialog, MutationDropDialog } from './dialogs';
+  import TimelineHeader from './TimelineHeader.svelte';
 
   interface Props {
     collapsed?: boolean;
@@ -26,6 +27,23 @@
 
   let mutationDialogOpen = $state(false);
   let mutationDialogAfterIndex = $state(-1);
+
+  let addExistingObjectDialogOpen = $state(false);
+  let addExistingObjectAfterIndex = $state(-1);
+
+  let createNewObjectDialogOpen = $state(false);
+  let createNewObjectAfterIndex = $state(-1);
+
+  // Drag-drop state
+  let dragType = $state<'card' | 'mutation' | 'milestone' | null>(null);
+  let draggedId = $state<string | null>(null);
+  let dropTargetIndex = $state<number | null>(null);
+  let dropTargetObjectId = $state<string | null>(null);
+
+  // Mutation drop dialog state
+  let mutationDropDialogOpen = $state(false);
+  let droppedMutationId = $state<string | null>(null);
+  let mutationDropTarget = $state<{ type: 'between' | 'below'; afterRenderedIndex?: number; attachedToObjectId?: string } | null>(null);
 
   // ============================================================================
   // Slot Groups - Group cards by timelineSlot for stacking
@@ -390,6 +408,18 @@
     expandedConnector = null;
   }
 
+  function openAddExistingObjectDialog(afterIndex: number) {
+    addExistingObjectAfterIndex = afterIndex;
+    addExistingObjectDialogOpen = true;
+    expandedConnector = null;
+  }
+
+  function openCreateNewObjectDialog(afterIndex: number) {
+    createNewObjectAfterIndex = afterIndex;
+    createNewObjectDialogOpen = true;
+    expandedConnector = null;
+  }
+
   function handleRemoveMilestone(milestoneId: string) {
     deleteMilestone(milestoneId);
   }
@@ -416,6 +446,159 @@
   function handleTimelineClick() {
     expandedConnector = null;
   }
+
+  // ============================================================================
+  // Drag-Drop Handlers
+  // ============================================================================
+
+  function handleCardDragStart(e: DragEvent, objectId: string) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData('text/plain', objectId);
+    e.dataTransfer.setData('application/x-aethel-card', objectId);
+    e.dataTransfer.effectAllowed = 'move';
+    dragType = 'card';
+    draggedId = objectId;
+  }
+
+  function handleCardDragEnd() {
+    dragType = null;
+    draggedId = null;
+    dropTargetIndex = null;
+  }
+
+  function handleMutationDragStart(e: DragEvent, placementId: string) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData('text/plain', placementId);
+    e.dataTransfer.setData('application/x-aethel-mutation', placementId);
+    e.dataTransfer.effectAllowed = 'move';
+    dragType = 'mutation';
+    draggedId = placementId;
+  }
+
+  function handleMutationDragEnd() {
+    dragType = null;
+    draggedId = null;
+    dropTargetIndex = null;
+    dropTargetObjectId = null;
+  }
+
+  function handleMilestoneDragStart(e: DragEvent, milestoneId: string) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData('text/plain', milestoneId);
+    e.dataTransfer.setData('application/x-aethel-milestone', milestoneId);
+    e.dataTransfer.effectAllowed = 'move';
+    dragType = 'milestone';
+    draggedId = milestoneId;
+  }
+
+  function handleMilestoneDragEnd() {
+    dragType = null;
+    draggedId = null;
+    dropTargetIndex = null;
+  }
+
+  // Connector drop zone handlers
+  function handleConnectorDragOver(e: DragEvent, afterIndex: number) {
+    e.preventDefault();
+    if (!e.dataTransfer) return;
+    e.dataTransfer.dropEffect = 'move';
+    dropTargetIndex = afterIndex;
+  }
+
+  function handleConnectorDragLeave(afterIndex: number) {
+    if (dropTargetIndex === afterIndex) {
+      dropTargetIndex = null;
+    }
+  }
+
+  function handleConnectorDrop(e: DragEvent, afterIndex: number) {
+    e.preventDefault();
+
+    if (dragType === 'card' && draggedId) {
+      // Reorder card
+      reorderCard(draggedId, afterIndex + 1);
+    } else if (dragType === 'mutation' && draggedId) {
+      // Show mutation drop dialog
+      droppedMutationId = draggedId;
+      mutationDropTarget = { type: 'between', afterRenderedIndex: afterIndex };
+      mutationDropDialogOpen = true;
+    } else if (dragType === 'milestone' && draggedId) {
+      // Move milestone
+      moveMilestone(draggedId, afterIndex);
+    }
+
+    dropTargetIndex = null;
+    dragType = null;
+    draggedId = null;
+  }
+
+  // Card as drop target (for mutation attachment)
+  function handleCardDragOver(e: DragEvent, objectId: string) {
+    // Only accept mutations for attachment
+    if (dragType !== 'mutation') return;
+    e.preventDefault();
+    if (!e.dataTransfer) return;
+    e.dataTransfer.dropEffect = 'move';
+    dropTargetObjectId = objectId;
+  }
+
+  function handleCardDragLeave(objectId: string) {
+    if (dropTargetObjectId === objectId) {
+      dropTargetObjectId = null;
+    }
+  }
+
+  function handleCardDropForMutation(e: DragEvent, objectId: string) {
+    if (dragType !== 'mutation' || !draggedId) return;
+    e.preventDefault();
+
+    // Show mutation drop dialog with 'below' target
+    droppedMutationId = draggedId;
+    mutationDropTarget = { type: 'below', attachedToObjectId: objectId };
+    mutationDropDialogOpen = true;
+
+    dropTargetObjectId = null;
+    dragType = null;
+    draggedId = null;
+  }
+
+  // Mutation drop dialog handlers
+  function handleMutationDropMove() {
+    if (!droppedMutationId || !mutationDropTarget) return;
+    moveMutation(droppedMutationId, {
+      display: mutationDropTarget.type,
+      afterRenderedIndex: mutationDropTarget.afterRenderedIndex,
+      attachedToObjectId: mutationDropTarget.attachedToObjectId,
+    });
+    closeMutationDropDialog();
+  }
+
+  function handleMutationDropDuplicate() {
+    if (!droppedMutationId || !mutationDropTarget) return;
+    duplicateMutation(droppedMutationId, {
+      display: mutationDropTarget.type,
+      afterRenderedIndex: mutationDropTarget.afterRenderedIndex,
+      attachedToObjectId: mutationDropTarget.attachedToObjectId,
+    });
+    closeMutationDropDialog();
+  }
+
+  function handleMutationDropNewMutation() {
+    if (!droppedMutationId || !mutationDropTarget) return;
+    // Open mutation dialog at new position
+    const placement = timeline.getPlacement(droppedMutationId);
+    if (placement && mutationDropTarget.afterRenderedIndex !== undefined) {
+      mutationDialogAfterIndex = mutationDropTarget.afterRenderedIndex;
+      mutationDialogOpen = true;
+    }
+    closeMutationDropDialog();
+  }
+
+  function closeMutationDropDialog() {
+    mutationDropDialogOpen = false;
+    droppedMutationId = null;
+    mutationDropTarget = null;
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -440,6 +623,9 @@
       <p class="empty-desc">Mark objects as "Rendered" to add them here</p>
     </div>
   {:else}
+    <!-- Timeline header with undo/redo -->
+    <TimelineHeader />
+
     <!-- Thread header - outside scroll -->
     {#if threadRowCount > 0}
       <div class="thread-header">
@@ -482,15 +668,30 @@
         <!-- Flow items -->
         {#each flowItems as item (item.key)}
           {#if item.type === 'connector'}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="flow-item connector"
               class:expanded={expandedConnector === item.afterIndex}
+              class:drop-active={dropTargetIndex === item.afterIndex}
+              ondragover={(e) => handleConnectorDragOver(e, item.afterIndex)}
+              ondragleave={() => handleConnectorDragLeave(item.afterIndex)}
+              ondrop={(e) => handleConnectorDrop(e, item.afterIndex)}
             >
               <button class="node-btn" onclick={(e) => handleConnectorClick(e, item.afterIndex)}>+</button>
               {#if expandedConnector === item.afterIndex}
                 <div class="node-menu">
-                  <button onclick={() => openMutationDialog(item.afterIndex)}>+ Mutation</button>
-                  <button onclick={() => openMilestoneDialog(item.afterIndex)}>+ Milestone</button>
+                  <button onclick={() => openMutationDialog(item.afterIndex)}>
+                    <span class="menu-icon">~</span> Add Mutation
+                  </button>
+                  <button onclick={() => openAddExistingObjectDialog(item.afterIndex)}>
+                    <span class="menu-icon">&#8250;</span> Add Existing Object
+                  </button>
+                  <button onclick={() => openCreateNewObjectDialog(item.afterIndex)}>
+                    <span class="menu-icon">+</span> Create New Object
+                  </button>
+                  <button onclick={() => openMilestoneDialog(item.afterIndex)}>
+                    <span class="menu-icon">|</span> Add Milestone
+                  </button>
                 </div>
               {/if}
             </div>
@@ -528,11 +729,20 @@
                     {/if}
 
                     <!-- svelte-ignore a11y_click_events_have_key_events -->
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div
                       class="card"
                       class:selected={isSelected}
                       class:current={isCurrent}
+                      class:dragging={draggedId === obj.id && dragType === 'card'}
+                      class:drop-target={dropTargetObjectId === obj.id}
                       style:--card-color={color}
+                      draggable="true"
+                      ondragstart={(e) => handleCardDragStart(e, obj.id)}
+                      ondragend={handleCardDragEnd}
+                      ondragover={(e) => handleCardDragOver(e, obj.id)}
+                      ondragleave={() => handleCardDragLeave(obj.id)}
+                      ondrop={(e) => handleCardDropForMutation(e, obj.id)}
                       onclick={(e) => handleCardClick(e, obj.id, card.index)}
                       ondblclick={() => handleCardDoubleClick(obj.id)}
                       role="button"
@@ -557,7 +767,14 @@
                         {#each card.mutationsBelow as mutation (mutation.id)}
                           {@const mutObj = objects.get(mutation.objectId)}
                           {@const mutColor = mutObj ? objects.getEffectiveColor(mutObj.id) : '#888'}
-                          <div class="mut-chip" style:--mc={mutColor}>
+                          <div
+                            class="mut-chip"
+                            class:dragging={draggedId === mutation.id && dragType === 'mutation'}
+                            style:--mc={mutColor}
+                            draggable="true"
+                            ondragstart={(e) => handleMutationDragStart(e, mutation.id)}
+                            ondragend={handleMutationDragEnd}
+                          >
                             <span>{mutation.mutation?.label ?? 'Changed'}</span>
                             <button class="mut-x" onclick={() => handleRemoveMutation(mutation.id)}>×</button>
                           </div>
@@ -575,7 +792,14 @@
             {@const mutColor = mutObj ? objects.getEffectiveColor(mutObj.id) : '#888'}
 
             <div class="flow-item inline-mut">
-              <div class="mut-chip standalone" style:--mc={mutColor}>
+              <div
+                class="mut-chip standalone"
+                class:dragging={draggedId === mut.id && dragType === 'mutation'}
+                style:--mc={mutColor}
+                draggable="true"
+                ondragstart={(e) => handleMutationDragStart(e, mut.id)}
+                ondragend={handleMutationDragEnd}
+              >
                 <span>{mut.mutation?.label ?? '~'}</span>
                 <button class="mut-x" onclick={() => handleRemoveMutation(mut.id)}>×</button>
               </div>
@@ -588,7 +812,11 @@
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="flow-item milestone-marker"
+              class:dragging={draggedId === m.id && dragType === 'milestone'}
               style:--ml-color={m.color ?? '#8b5cf6'}
+              draggable="true"
+              ondragstart={(e) => handleMilestoneDragStart(e, m.id)}
+              ondragend={handleMilestoneDragEnd}
               ondblclick={() => openMilestoneDialog(m.afterIndex, m.id)}
             >
               <div class="ml-line"></div>
@@ -621,6 +849,28 @@
   open={mutationDialogOpen}
   afterIndex={mutationDialogAfterIndex}
   onClose={() => mutationDialogOpen = false}
+/>
+
+<AddExistingObjectDialog
+  open={addExistingObjectDialogOpen}
+  afterIndex={addExistingObjectAfterIndex}
+  onClose={() => addExistingObjectDialogOpen = false}
+/>
+
+<CreateNewObjectDialog
+  open={createNewObjectDialogOpen}
+  afterIndex={createNewObjectAfterIndex}
+  onClose={() => createNewObjectDialogOpen = false}
+/>
+
+<MutationDropDialog
+  open={mutationDropDialogOpen}
+  mutationId={droppedMutationId}
+  targetPosition={mutationDropTarget}
+  onMove={handleMutationDropMove}
+  onDuplicate={handleMutationDropDuplicate}
+  onNewMutation={handleMutationDropNewMutation}
+  onClose={closeMutationDropDialog}
 />
 
 <style>
@@ -850,7 +1100,13 @@
     top: 50%;
     transform: translateY(-50%);
     height: var(--spine-thickness);
-    background: var(--spine-color);
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--spine-color) 3%,
+      var(--spine-color) 97%,
+      transparent 100%
+    );
     z-index: 0;
     border-radius: 1px;
   }
@@ -879,59 +1135,99 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: var(--text-tertiary);
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-muted, var(--text-tertiary));
     background: var(--surface-base);
-    border: 1.5px solid var(--spine-color);
+    border: 1.5px solid var(--border-subtle);
     border-radius: 50%;
     cursor: pointer;
-    transition: all 0.12s ease;
+    transition: all 0.18s ease;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   }
   .node-btn:hover {
     color: var(--accent-primary, #3b82f6);
     border-color: var(--accent-primary, #3b82f6);
-    background: var(--surface-raised);
-    transform: scale(1.08);
+    background: color-mix(in srgb, var(--accent-primary, #3b82f6) 6%, var(--surface-raised));
+    transform: scale(1.12);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent-primary, #3b82f6) 12%, transparent),
+      0 2px 4px rgba(0, 0, 0, 0.06);
   }
   .flow-item.connector.expanded .node-btn {
     color: #fff;
     background: var(--accent-primary, #3b82f6);
     border-color: var(--accent-primary, #3b82f6);
-    transform: scale(1.08);
+    transform: scale(1.12) rotate(45deg);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent-primary, #3b82f6) 15%, transparent),
+      0 4px 8px rgba(59, 130, 246, 0.25);
   }
 
   .node-menu {
     position: absolute;
-    top: calc(100% + var(--space-xs));
+    top: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%);
     display: flex;
     flex-direction: column;
     gap: 2px;
-    background: var(--surface-raised);
-    border: 1px solid var(--border-default);
-    border-radius: var(--space-sm);
-    padding: var(--space-xs);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08);
+    background: var(--surface-overlay, var(--surface-raised));
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg, 8px);
+    padding: 6px;
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.12),
+      0 2px 6px rgba(0, 0, 0, 0.08);
     z-index: 100;
+    animation: menu-appear 0.15s ease-out;
   }
+
+  @keyframes menu-appear {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(-4px) scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0) scale(1);
+    }
+  }
+
   .node-menu button {
-    padding: var(--space-sm) var(--space-md);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
     font-size: 0.75rem;
     font-weight: 500;
     color: var(--text-secondary);
     background: transparent;
     border: none;
-    border-radius: var(--space-xs);
+    border-radius: var(--radius-md, 6px);
     cursor: pointer;
     white-space: nowrap;
     text-align: left;
-    transition: all 0.1s ease;
+    transition: all 0.12s ease;
   }
   .node-menu button:hover {
     background: var(--hover-bg);
     color: var(--text-primary);
+    padding-left: 16px;
+  }
+
+  .menu-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .node-menu button:hover .menu-icon {
+    color: var(--accent-primary, #3b82f6);
   }
 
   /* Card Groups */
@@ -969,24 +1265,33 @@
     display: flex;
     align-items: flex-start;
     gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
+    padding: 10px 12px;
     background: var(--surface-raised);
-    border: 1.5px solid var(--border-subtle);
-    border-radius: var(--space-sm);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg, 8px);
     cursor: pointer;
-    transition: all 0.12s ease;
+    transition: all 0.18s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
   }
   .card:hover {
     border-color: var(--border-default);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+    box-shadow:
+      0 4px 12px rgba(0, 0, 0, 0.06),
+      0 1px 3px rgba(0, 0, 0, 0.04);
+    transform: translateY(-2px);
   }
   .card.selected {
     border-color: var(--card-color);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--card-color) 18%, transparent);
+    background: color-mix(in srgb, var(--card-color) 4%, var(--surface-raised));
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--card-color) 20%, transparent),
+      0 4px 12px rgba(0, 0, 0, 0.08);
   }
   .card.current {
     border-color: var(--accent-primary, #3b82f6);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary, #3b82f6) 15%, transparent);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent-primary, #3b82f6) 18%, transparent),
+      0 4px 12px rgba(0, 0, 0, 0.08);
   }
 
   .cursor-arrow {
@@ -1056,29 +1361,34 @@
   .below-mutations {
     display: flex;
     flex-direction: column;
-    gap: var(--space-xs);
-    margin-top: var(--space-sm);
-    padding-left: 2px;
+    gap: 4px;
+    margin-top: 8px;
+    padding-left: 4px;
+    padding-right: 4px;
   }
 
   .mut-chip {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: var(--space-xs);
-    padding: var(--space-xs) var(--space-sm);
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
     font-size: 0.6875rem;
-    color: var(--text-secondary);
-    background: color-mix(in srgb, var(--mc) 8%, var(--surface-base));
-    border: 1px dashed color-mix(in srgb, var(--mc) 30%, var(--border-subtle));
-    border-left: 2px solid var(--mc);
-    border-radius: var(--space-xs);
-    transition: all 0.1s ease;
+    font-weight: 500;
+    color: color-mix(in srgb, var(--mc) 85%, var(--text-primary));
+    background: color-mix(in srgb, var(--mc) 12%, var(--surface-raised));
+    border: none;
+    border-left: 3px solid var(--mc);
+    border-radius: var(--radius-sm, 4px);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    transition: all 0.15s ease;
   }
   .mut-chip:hover {
-    background: color-mix(in srgb, var(--mc) 12%, var(--surface-base));
+    background: color-mix(in srgb, var(--mc) 18%, var(--surface-raised));
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+    transform: translateX(1px);
   }
   .mut-chip.standalone {
-    border-left-style: dashed;
+    padding: 5px 12px 5px 10px;
   }
 
   .mut-x {
@@ -1123,33 +1433,48 @@
 
   .ml-line {
     position: absolute;
-    top: calc(-1 * var(--flow-padding-y));
-    bottom: calc(-1 * var(--flow-padding-y));
+    top: calc(-1 * var(--flow-padding-y) - 4px);
+    bottom: calc(-1 * var(--flow-padding-y) - 4px);
     left: 50%;
-    width: var(--spine-thickness);
-    background: var(--ml-color);
+    width: 2px;
+    background: linear-gradient(
+      to bottom,
+      transparent 0%,
+      var(--ml-color) 15%,
+      var(--ml-color) 85%,
+      transparent 100%
+    );
     transform: translateX(-50%);
-    z-index: -1;
-    opacity: 0.6;
+    z-index: 0;
   }
 
   .ml-badge {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: var(--space-xs);
-    padding: var(--space-xs) var(--space-md);
+    gap: 6px;
+    padding: 6px 14px;
     font-size: 0.6875rem;
     font-weight: 600;
+    letter-spacing: 0.01em;
     color: #fff;
-    background: var(--ml-color);
-    border-radius: var(--space-lg);
+    background: linear-gradient(
+      135deg,
+      var(--ml-color) 0%,
+      color-mix(in srgb, var(--ml-color) 85%, #000) 100%
+    );
+    border-radius: 100px;
     z-index: 1;
     white-space: nowrap;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-    transition: all 0.1s ease;
+    box-shadow:
+      0 2px 6px color-mix(in srgb, var(--ml-color) 30%, transparent),
+      0 1px 2px rgba(0, 0, 0, 0.1);
+    transition: all 0.18s ease;
   }
   .ml-badge:hover {
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    transform: scale(1.03);
+    box-shadow:
+      0 4px 12px color-mix(in srgb, var(--ml-color) 35%, transparent),
+      0 2px 4px rgba(0, 0, 0, 0.12);
   }
 
   .ml-x {
@@ -1178,14 +1503,19 @@
   .thread-stripes {
     display: flex;
     gap: 2px;
-    height: 4px;
-    margin-bottom: var(--space-xs);
+    height: 3px;
+    margin-bottom: 6px;
+    border-radius: 2px;
+    overflow: hidden;
   }
   .thread-stripe {
     flex: 1;
-    border-radius: 2px;
-    min-width: var(--space-sm);
-    box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.05);
+    min-width: 12px;
+    opacity: 0.85;
+    transition: opacity 0.15s ease;
+  }
+  .card-slot:hover .thread-stripe {
+    opacity: 1;
   }
 
   /* Footer */
@@ -1203,5 +1533,39 @@
     color: var(--text-tertiary);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.02em;
+  }
+
+  /* ============================================================================
+   * Drag-Drop States
+   * ============================================================================ */
+
+  /* Drag source states */
+  .card.dragging,
+  .mut-chip.dragging,
+  .milestone-marker.dragging {
+    opacity: 0.4;
+    transform: scale(0.98);
+  }
+
+  /* Drop zone active state for connectors */
+  .flow-item.connector.drop-active {
+    padding: 0 var(--space-lg);
+  }
+
+  .flow-item.connector.drop-active .node-btn {
+    transform: scale(1.3);
+    background: var(--accent-primary, #3b82f6);
+    color: white;
+    border-color: var(--accent-primary, #3b82f6);
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--accent-primary, #3b82f6) 20%, transparent),
+      0 4px 8px rgba(59, 130, 246, 0.25);
+  }
+
+  /* Card as drop target (for mutations) */
+  .card.drop-target {
+    outline: 2px dashed var(--accent-primary, #3b82f6);
+    outline-offset: 2px;
+    background: color-mix(in srgb, var(--accent-primary, #3b82f6) 8%, var(--surface-raised));
   }
 </style>

@@ -13,7 +13,7 @@
   let name = $state('');
   let description = $state('');
   let selectedColor = $state('#8b5cf6');
-  let exportAs = $state<'part' | 'act' | 'section' | 'book'>('act');
+  let exportAs = $state<'part' | 'act' | 'section' | 'book' | undefined>(undefined);
 
   const presetColors = [
     { name: 'Purple', value: '#8b5cf6' },
@@ -34,13 +34,13 @@
       name = existingMilestone.name;
       description = existingMilestone.description ?? '';
       selectedColor = existingMilestone.color ?? '#8b5cf6';
-      exportAs = existingMilestone.exportAs ?? 'act';
+      exportAs = existingMilestone.exportAs;
     } else if (open) {
       // Reset for new milestone
       name = '';
       description = '';
       selectedColor = '#8b5cf6';
-      exportAs = 'act';
+      exportAs = undefined;
     }
   });
 
@@ -48,19 +48,27 @@
     e.preventDefault();
     if (!name.trim()) return;
 
+    const options: {
+      color?: string;
+      description?: string;
+      exportAs?: 'part' | 'act' | 'section' | 'book';
+    } = {
+      color: selectedColor,
+      description: description.trim() || undefined,
+    };
+
+    // Only include exportAs if user selected one
+    if (exportAs) {
+      options.exportAs = exportAs;
+    }
+
     if (isEditing && milestoneId) {
       milestones.update(milestoneId, {
         name: name.trim(),
-        description: description.trim() || undefined,
-        color: selectedColor,
-        exportAs,
+        ...options,
       });
     } else {
-      milestones.create(name.trim(), afterIndex, {
-        color: selectedColor,
-        description: description.trim() || undefined,
-        exportAs,
-      });
+      milestones.create(name.trim(), afterIndex, options);
     }
 
     onClose();
@@ -115,14 +123,22 @@
         </div>
 
         <div class="field">
-          <label>Type</label>
+          <label>Export Type (optional)</label>
           <div class="type-options">
+            <button
+              type="button"
+              class="type-btn"
+              class:selected={exportAs === undefined}
+              onclick={() => exportAs = undefined}
+            >
+              None
+            </button>
             {#each ['act', 'part', 'section', 'book'] as type}
               <button
                 type="button"
                 class="type-btn"
                 class:selected={exportAs === type}
-                onclick={() => exportAs = type as typeof exportAs}
+                onclick={() => exportAs = type as 'act' | 'part' | 'section' | 'book'}
               >
                 {type.charAt(0).toUpperCase() + type.slice(1)}
               </button>

@@ -8,3 +8,6 @@ export { default as MarkerDialog } from './MarkerDialog.svelte';
 export { default as SplitDialog } from './SplitDialog.svelte';
 export { default as MilestoneDialog } from './MilestoneDialog.svelte';
 export { default as AddMutationDialog } from './AddMutationDialog.svelte';
+export { default as AddExistingObjectDialog } from './AddExistingObjectDialog.svelte';
+export { default as CreateNewObjectDialog } from './CreateNewObjectDialog.svelte';
+export { default as MutationDropDialog } from './MutationDropDialog.svelte';

@@ -411,3 +411,120 @@ export function createToggleRenderedCommand(objectId: string): TimelineCommand {
 		},
 	};
 }
+
+// ============================================================================
+// v2: Drag and Drop Commands
+// ============================================================================
+
+/**
+ * Reorder a card in the timeline by changing its sortOrder
+ */
+export function createReorderCardCommand(
+	objectId: string,
+	newSortOrder: number
+): TimelineCommand {
+	const obj = objects.get(objectId);
+	if (!obj) {
+		throw new Error(`Object ${objectId} not found`);
+	}
+
+	const originalSortOrder = obj.sortOrder ?? 0;
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'reorder-card',
+		description: `Reorder "${obj.name}"`,
+		execute: () => {
+			objects.update(objectId, { sortOrder: newSortOrder });
+		},
+		undo: () => {
+			objects.update(objectId, { sortOrder: originalSortOrder });
+		},
+	};
+}
+
+/**
+ * Move a mutation to a new position
+ */
+export function createMoveMutationCommand(
+	placementId: string,
+	newPosition: {
+		display: MutationDisplay;
+		attachedToObjectId?: string;
+		afterRenderedIndex?: number;
+	}
+): TimelineCommand {
+	const placement = timeline.getPlacement(placementId);
+	if (!placement) {
+		throw new Error(`Placement ${placementId} not found`);
+	}
+
+	const originalPosition = {
+		display: placement.mutationDisplay ?? 'between' as MutationDisplay,
+		attachedToObjectId: placement.attachedToObjectId,
+		afterRenderedIndex: placement.afterRenderedIndex,
+	};
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'move-mutation',
+		description: `Move mutation`,
+		execute: () => {
+			timeline.setMutationDisplay(placementId, newPosition.display, {
+				attachedToObjectId: newPosition.attachedToObjectId,
+				afterRenderedIndex: newPosition.afterRenderedIndex,
+			});
+		},
+		undo: () => {
+			timeline.setMutationDisplay(placementId, originalPosition.display, {
+				attachedToObjectId: originalPosition.attachedToObjectId,
+				afterRenderedIndex: originalPosition.afterRenderedIndex,
+			});
+		},
+	};
+}
+
+/**
+ * Duplicate a mutation at a new position
+ */
+export function createDuplicateMutationCommand(
+	sourcePlacementId: string,
+	newPosition: {
+		display: MutationDisplay;
+		attachedToObjectId?: string;
+		afterRenderedIndex?: number;
+	}
+): TimelineCommand {
+	const source = timeline.getPlacement(sourcePlacementId);
+	if (!source) {
+		throw new Error(`Placement ${sourcePlacementId} not found`);
+	}
+
+	const sourceObj = objects.get(source.objectId);
+
+	// Create new placement with same mutation data
+	const newPlacement: TimelinePlacement = {
+		id: crypto.randomUUID(),
+		objectId: source.objectId,
+		type: 'mutation',
+		mutationDisplay: newPosition.display,
+		attachedToObjectId: newPosition.attachedToObjectId,
+		afterRenderedIndex: newPosition.afterRenderedIndex,
+		mutation: source.mutation ? { ...source.mutation } : undefined,
+		threadIds: source.threadIds ? [...source.threadIds] : undefined,
+		createdAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+	};
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'duplicate-mutation',
+		description: `Duplicate mutation for "${sourceObj?.name ?? 'unknown'}"`,
+		execute: () => {
+			timeline.addPlacement(newPlacement);
+		},
+		undo: () => {
+			timeline.removePlacement(newPlacement.id);
+		},
+	};
+}

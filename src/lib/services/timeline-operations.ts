@@ -22,7 +22,12 @@ import {
 	createMoveMilestoneCommand,
 	createChangeMutationDisplayCommand,
 	createToggleRenderedCommand,
+	// Drag-drop commands
+	createReorderCardCommand,
+	createMoveMutationCommand,
+	createDuplicateMutationCommand,
 } from './timeline-commands';
+import type { MutationDisplay } from '$lib/types';
 
 // ============================================================================
 // Object Operations
@@ -377,4 +382,69 @@ export function navigateToObject(objectId: string): void {
 		timelineEditor.selectCard(objectId);
 		timeline.setCursorIndex(index);
 	}
+}
+
+// ============================================================================
+// v2: Drag and Drop Operations
+// ============================================================================
+
+/**
+ * Reorder a card in the timeline by changing its sortOrder
+ * targetIndex is the position to insert at (0-indexed)
+ */
+export function reorderCard(objectId: string, targetIndex: number): void {
+	const obj = objects.get(objectId);
+	if (!obj) return;
+
+	// Calculate new sortOrder based on target position
+	const renderedObjects = timeline.renderedObjects;
+	let newSortOrder: number;
+
+	if (targetIndex <= 0) {
+		// Move to beginning
+		const first = renderedObjects[0];
+		newSortOrder = (first?.sortOrder ?? 0) - 1;
+	} else if (targetIndex >= renderedObjects.length) {
+		// Move to end
+		const last = renderedObjects[renderedObjects.length - 1];
+		newSortOrder = (last?.sortOrder ?? 0) + 1;
+	} else {
+		// Insert between two cards
+		const before = renderedObjects[targetIndex - 1];
+		const after = renderedObjects[targetIndex];
+		newSortOrder = ((before?.sortOrder ?? 0) + (after?.sortOrder ?? 0)) / 2;
+	}
+
+	const command = createReorderCardCommand(objectId, newSortOrder);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Move a mutation to a new position
+ */
+export function moveMutation(
+	placementId: string,
+	newPosition: {
+		display: MutationDisplay;
+		attachedToObjectId?: string;
+		afterRenderedIndex?: number;
+	}
+): void {
+	const command = createMoveMutationCommand(placementId, newPosition);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Duplicate a mutation at a new position
+ */
+export function duplicateMutation(
+	sourcePlacementId: string,
+	newPosition: {
+		display: MutationDisplay;
+		attachedToObjectId?: string;
+		afterRenderedIndex?: number;
+	}
+): void {
+	const command = createDuplicateMutationCommand(sourcePlacementId, newPosition);
+	timelineHistory.execute(command);
 }
