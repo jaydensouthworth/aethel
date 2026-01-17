@@ -77,6 +77,24 @@ export const OBJECT_TYPES: Record<string, ObjectType> = {
 };
 
 // ============================================================================
+// Object Sections (Multiple Text Contexts)
+// ============================================================================
+
+/**
+ * ObjectSection - A named text section within an AethelObject
+ * Each section has its own independent TipTap content.
+ * When the parent object is used as a thread, each section becomes a subthread.
+ */
+export interface ObjectSection {
+  id: string;
+  name: string; // User-defined name (e.g., "Synopsis", "Content", "Notes")
+  content: JSONContent | null;
+  sortOrder: number; // For ordering sections within the object (lower = first)
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ============================================================================
 // Attributes
 // ============================================================================
 
@@ -121,7 +139,11 @@ export interface AethelObject {
   timelineSlot?: number; // Cards with same slot number are stacked (simultaneous events)
 
   // Content
-  content: JSONContent | null; // TipTap JSON document
+  content: JSONContent | null; // TipTap JSON document (legacy single content)
+
+  // Multiple text sections (when present, replaces content semantically)
+  // Each section can become a subthread when this object is used as a thread
+  sections?: ObjectSection[];
 
   // Metadata
   aliases: string[];
@@ -183,6 +205,11 @@ export interface TimelinePlacement {
   mutationDisplay?: MutationDisplay;
   // Thread associations (many-to-many)
   threadIds?: string[];
+
+  // Subthread targeting (when thread has sections)
+  // undefined/empty = full thread (all sections)
+  // specified = only these section IDs (subthreads)
+  subthreadIds?: string[];
 
   // === Legacy fields (kept for reference) ===
   /** @deprecated Use position instead */
@@ -340,6 +367,21 @@ export function createObject(
 }
 
 /**
+ * Create a new object section
+ */
+export function createSection(name: string, sortOrder: number = 0): ObjectSection {
+  const now = new Date().toISOString();
+  return {
+    id: createObjectId(),
+    name,
+    content: null,
+    sortOrder,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
  * Create a new timeline placement (unified position model)
  */
 export function createPlacement(
@@ -352,6 +394,8 @@ export function createPlacement(
     position?: number; // For 'between' display - unified timeline position
     // Thread associations
     threadIds?: string[];
+    // Subthread targeting (section IDs when thread has sections)
+    subthreadIds?: string[];
     // Mutation data
     mutation?: { label: string; changes: Record<string, { from: unknown; to: unknown }> };
   }
@@ -365,6 +409,7 @@ export function createPlacement(
     attachedToObjectId: options?.attachedToObjectId,
     position: options?.position,
     threadIds: options?.threadIds,
+    subthreadIds: options?.subthreadIds,
     mutation: options?.mutation,
     createdAt: now,
     updatedAt: now,

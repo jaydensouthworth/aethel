@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { objects, timeline, ui, project, timelineEditor, milestones } from '$lib/stores';
-  import { createObject, getObjectType, createMilestone } from '$lib/types';
+  import { createObject, getObjectType, createMilestone, createSection } from '$lib/types';
   import type { TimelinePlacement, AethelObject } from '$lib/types';
   import ObjectTree from '$lib/components/ObjectTree.svelte';
   import ObjectPropertiesPanel from '$lib/components/ObjectPropertiesPanel.svelte';
   import SingleTrackTimeline from '$lib/components/timeline/SingleTrackTimeline.svelte';
   import SplashScreen from '$lib/components/SplashScreen.svelte';
   import Editor from '$lib/editor/Editor.svelte';
+  import SectionTabs from '$lib/components/SectionTabs.svelte';
   import { handleKeyDown as handleTimelineShortcut } from '$lib/services/timeline-shortcuts';
 
   // Context menus
@@ -88,6 +89,54 @@
   const selectedObjectType = $derived(selectedObject ? getObjectType(selectedObject.typeId) : null);
   const isContentType = $derived(selectedObjectType?.isContentType ?? false);
   let lastTimelineTool = $state(timelineEditor.activeTool);
+
+  // Section support (multiple text contexts)
+  const hasSections = $derived(selectedObject?.sections && selectedObject.sections.length > 0);
+  const sortedSections = $derived(
+    hasSections ? [...selectedObject!.sections!].sort((a, b) => a.sortOrder - b.sortOrder) : []
+  );
+  // Use $derived.by to explicitly access the reactive store property
+  const activeSectionId = $derived.by(() => {
+    if (!selectedObject) return null;
+    // Access ui.activeSectionByObject directly to establish reactive dependency
+    const stored = ui.activeSectionByObject[selectedObject.id];
+    return stored ?? sortedSections[0]?.id ?? null;
+  });
+  const currentSection = $derived.by(() => {
+    if (!activeSectionId || sortedSections.length === 0) return null;
+    return sortedSections.find((s) => s.id === activeSectionId) ?? null;
+  });
+
+  // Section handlers
+  function handleAddSection() {
+    if (!selectedObject) return;
+    const section = objects.addSection(selectedObject.id, `Section ${(selectedObject.sections?.length ?? 0) + 1}`);
+    if (section) {
+      ui.setActiveSection(selectedObject.id, section.id);
+    }
+  }
+
+  function handleRemoveSection(sectionId: string) {
+    if (!selectedObject) return;
+    // If removing active section, switch to first remaining section
+    if (activeSectionId === sectionId) {
+      const remaining = sortedSections.filter((s) => s.id !== sectionId);
+      if (remaining.length > 0) {
+        ui.setActiveSection(selectedObject.id, remaining[0].id);
+      }
+    }
+    objects.removeSection(selectedObject.id, sectionId);
+  }
+
+  function handleRenameSection(sectionId: string, newName: string) {
+    if (!selectedObject) return;
+    objects.updateSection(selectedObject.id, sectionId, { name: newName });
+  }
+
+  function handleSectionContentChange(content: unknown) {
+    if (!selectedObject || !activeSectionId) return;
+    objects.updateSection(selectedObject.id, activeSectionId, { content: content as any });
+  }
 
   // Track changes for auto-save
   let lastObjectsHash = $state('');
@@ -260,10 +309,17 @@
     const itemColor = '#f59e0b';
 
     // Chapters (rendered) - parented under Chapters folder - with object references!
+    // Chapter 1 demonstrates the new sections feature (Synopsis + Content)
     const ch1 = createObject('The Long-Expected Party', 'chapter', chaptersFolder.id);
     ch1.rendered = true;
     ch1.position = 1000;
-    ch1.content = {
+
+    // Create sections for chapter 1 (book template: Synopsis + Content)
+    const ch1Synopsis = createSection('Synopsis', 0);
+    ch1Synopsis.content = textToContent(`Bilbo Baggins celebrates his 111th birthday with an extravagant party, then mysteriously disappears, leaving Bag End and his possessions to his nephew Frodo—including a certain gold ring.`);
+
+    const ch1Content = createSection('Content', 1);
+    ch1Content.content = {
       type: 'doc',
       content: [
         {
@@ -299,11 +355,19 @@
       ],
     };
 
+    ch1.sections = [ch1Synopsis, ch1Content];
+
     const ch2 = createObject('The Shadow of the Past', 'chapter', chaptersFolder.id);
     ch2.rendered = true;
     ch2.position = 2000;
     ch2.timelineSlot = 1; // Same slot as ch2b - these happen simultaneously
-    ch2.content = {
+
+    // Chapter 2 also uses sections
+    const ch2Synopsis = createSection('Synopsis', 0);
+    ch2Synopsis.content = textToContent(`Gandalf reveals the true nature of the Ring to Frodo, telling the story of its creation and the danger it poses.`);
+
+    const ch2Content = createSection('Content', 1);
+    ch2Content.content = {
       type: 'doc',
       content: [
         {
@@ -316,6 +380,8 @@
         },
       ],
     };
+
+    ch2.sections = [ch2Synopsis, ch2Content];
 
     // Parallel chapter - happens at the same time as ch2 (Gandalf's POV)
     const ch2b = createObject("Gandalf's Research", 'chapter', chaptersFolder.id);
@@ -401,6 +467,12 @@
     frodoThread.isThread = true;
     frodoThread.threadColor = '#3b82f6';
     frodoThread.color = '#3b82f6';
+    // Add subthreads (sections) to Frodo's Arc
+    const frodoInner = createSection('Inner Journey', 0);
+    frodoInner.content = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: "Frodo's emotional and spiritual growth throughout the story." }] }] };
+    const frodoOuter = createSection('Outer Journey', 1);
+    frodoOuter.content = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: "Frodo's physical journey to Mordor." }] }] };
+    frodoThread.sections = [frodoInner, frodoOuter];
     objects.add(frodoThread);
 
     // Make threads visible
@@ -679,11 +751,27 @@
 
     <main class="content-panel">
       {#if selectedObject && isContentType}
-        <Editor
-          content={selectedObject.content}
-          onchange={(newContent) => objects.update(selectedObject.id, { content: newContent })}
-          dark={theme === 'dark'}
-        />
+        {#if hasSections && sortedSections.length > 0 && activeSectionId}
+          <SectionTabs
+            sections={sortedSections}
+            activeSectionId={activeSectionId}
+            onSelect={(id) => ui.setActiveSection(selectedObject.id, id)}
+            onAdd={handleAddSection}
+            onRemove={handleRemoveSection}
+            onRename={handleRenameSection}
+          />
+          <Editor
+            content={currentSection?.content ?? null}
+            onchange={handleSectionContentChange}
+            dark={theme === 'dark'}
+          />
+        {:else}
+          <Editor
+            content={selectedObject.content}
+            onchange={(newContent) => objects.update(selectedObject.id, { content: newContent })}
+            dark={theme === 'dark'}
+          />
+        {/if}
       {:else if selectedObject && !isContentType}
         <div class="folder-view">
           <div class="folder-icon" style:color={objects.getEffectiveColor(selectedObject.id)}>

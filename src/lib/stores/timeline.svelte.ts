@@ -708,6 +708,95 @@ class TimelineStore {
   }
 
   // ============================================================================
+  // Subthread Operations (for threads with sections)
+  // ============================================================================
+
+  /**
+   * Get placements in a specific subthread (section)
+   * Includes placements that target this specific subthread OR have no subthread targeting (full thread)
+   */
+  getPlacementsInSubthread(threadId: string, sectionId: string): TimelinePlacement[] {
+    return this.allPlacements.filter((p) => {
+      // Must be in the parent thread
+      if (!p.threadIds?.includes(threadId)) return false;
+      // If no subthreadIds specified, this placement applies to all sections (full thread)
+      if (!p.subthreadIds || p.subthreadIds.length === 0) return true;
+      // Otherwise, check if this section is specifically targeted
+      return p.subthreadIds.includes(sectionId);
+    });
+  }
+
+  /**
+   * Get placements that target the full thread (no subthread targeting)
+   */
+  getPlacementsInFullThread(threadId: string): TimelinePlacement[] {
+    return this.allPlacements.filter((p) => {
+      if (!p.threadIds?.includes(threadId)) return false;
+      return !p.subthreadIds || p.subthreadIds.length === 0;
+    });
+  }
+
+  /**
+   * Get cards in a specific subthread
+   */
+  getCardsInSubthread(threadId: string, sectionId: string): AethelObject[] {
+    const placements = this.getPlacementsInSubthread(threadId, sectionId);
+    const objectIds = new Set<string>();
+
+    for (const p of placements) {
+      if (p.mutationDisplay === 'below' && p.attachedToObjectId) {
+        objectIds.add(p.attachedToObjectId);
+      }
+      objectIds.add(p.objectId);
+    }
+
+    return this.renderedObjects.filter((obj) => objectIds.has(obj.id));
+  }
+
+  /**
+   * Check if a placement targets specific subthreads
+   */
+  hasSubthreadTargeting(placementId: string): boolean {
+    const p = this.getPlacement(placementId);
+    return Boolean(p?.subthreadIds && p.subthreadIds.length > 0);
+  }
+
+  /**
+   * Add subthread targeting to a placement
+   */
+  addSubthreadToPlacement(placementId: string, sectionId: string): void {
+    const p = this.getPlacement(placementId);
+    if (!p) return;
+
+    const currentSubthreads = p.subthreadIds ?? [];
+    if (!currentSubthreads.includes(sectionId)) {
+      this.updatePlacement(placementId, {
+        subthreadIds: [...currentSubthreads, sectionId],
+      });
+    }
+  }
+
+  /**
+   * Remove subthread targeting from a placement
+   */
+  removeSubthreadFromPlacement(placementId: string, sectionId: string): void {
+    const p = this.getPlacement(placementId);
+    if (!p?.subthreadIds) return;
+
+    const newSubthreads = p.subthreadIds.filter((id) => id !== sectionId);
+    this.updatePlacement(placementId, {
+      subthreadIds: newSubthreads.length > 0 ? newSubthreads : undefined,
+    });
+  }
+
+  /**
+   * Clear all subthread targeting (revert to full thread)
+   */
+  clearSubthreadTargeting(placementId: string): void {
+    this.updatePlacement(placementId, { subthreadIds: undefined });
+  }
+
+  // ============================================================================
   // Bulk Operations
   // ============================================================================
 

@@ -51,6 +51,14 @@
 	const cardsNotInThread = $derived(
 		isThreadObject && selectedObject ? timeline.getCardsNotInThread(selectedObject.id) : []
 	);
+	// Thread sections (subthreads)
+	const threadSections = $derived(
+		isThreadObject && selectedObject ? objects.getSections(selectedObject.id) : []
+	);
+	const hasSubthreads = $derived(threadSections.length > 0);
+
+	// Track which card rows are expanded to show subthread options
+	let expandedCardIds = $state<Set<string>>(new Set());
 
 	// Local state for editing
 	let editingName = $state(false);
@@ -228,6 +236,64 @@
 			timelineEditor.selectCard(cardId);
 		}
 	}
+
+	// Toggle card expansion for subthread options
+	function toggleCardExpanded(cardId: string) {
+		const newSet = new Set(expandedCardIds);
+		if (newSet.has(cardId)) {
+			newSet.delete(cardId);
+		} else {
+			newSet.add(cardId);
+		}
+		expandedCardIds = newSet;
+	}
+
+	// Get subthread targeting for a card
+	function getCardSubthreads(cardId: string): string[] {
+		if (!selectedObject) return [];
+		const placements = timeline.getPlacementsForObject(cardId);
+		for (const p of placements) {
+			if (p.threadIds?.includes(selectedObject.id)) {
+				return p.subthreadIds ?? [];
+			}
+		}
+		return [];
+	}
+
+	// Toggle a specific subthread for a card
+	function toggleSubthreadForCard(cardId: string, sectionId: string) {
+		if (!selectedObject) return;
+		const placements = timeline.getPlacementsForObject(cardId);
+		const placement = placements.find(p => p.threadIds?.includes(selectedObject.id));
+		if (!placement) return;
+
+		const currentSubthreads = placement.subthreadIds ?? [];
+		if (currentSubthreads.includes(sectionId)) {
+			timeline.removeSubthreadFromPlacement(placement.id, sectionId);
+		} else {
+			timeline.addSubthreadToPlacement(placement.id, sectionId);
+		}
+	}
+
+	// Check if card targets a specific subthread
+	function cardTargetsSubthread(cardId: string, sectionId: string): boolean {
+		return getCardSubthreads(cardId).includes(sectionId);
+	}
+
+	// Check if card targets full thread (no specific subthreads)
+	function cardTargetsFullThread(cardId: string): boolean {
+		return getCardSubthreads(cardId).length === 0;
+	}
+
+	// Set card to target full thread (clear subthread targeting)
+	function setCardToFullThread(cardId: string) {
+		if (!selectedObject) return;
+		const placements = timeline.getPlacementsForObject(cardId);
+		const placement = placements.find(p => p.threadIds?.includes(selectedObject.id));
+		if (placement) {
+			timeline.clearSubthreadTargeting(placement.id);
+		}
+	}
 </script>
 
 <div class="properties-panel" class:collapsed={ui.propertiesPanelCollapsed}>
@@ -294,6 +360,41 @@
 					</span>
 				</CollapsibleSection>
 
+				{#if objectType?.isContentType}
+					<CollapsibleSection title="Sections" badge={selectedObject.sections?.length ?? 0}>
+						<div class="sections-list">
+							{#if selectedObject.sections && selectedObject.sections.length > 0}
+								{@const sorted = [...selectedObject.sections].sort((a, b) => a.sortOrder - b.sortOrder)}
+								{#each sorted as section (section.id)}
+									<div class="section-item">
+										<span class="section-name">{section.name}</span>
+										{#if selectedObject.sections.length > 1}
+											<button
+												class="section-remove-btn"
+												onclick={() => objects.removeSection(selectedObject.id, section.id)}
+												title="Remove section"
+											>×</button>
+										{/if}
+									</div>
+								{/each}
+							{:else}
+								<p class="sections-empty">No sections - using single content area</p>
+							{/if}
+						</div>
+						<button
+							class="add-section-btn"
+							onclick={() => objects.addSection(selectedObject.id, `Section ${(selectedObject.sections?.length ?? 0) + 1}`)}
+						>
+							+ Add Section
+						</button>
+						{#if selectedObject.sections && selectedObject.sections.length > 0}
+							<span class="sections-hint">
+								Sections provide multiple text areas. When used as a thread, each section becomes a subthread.
+							</span>
+						{/if}
+					</CollapsibleSection>
+				{/if}
+
 				<CollapsibleSection title="Timeline">
 					<div class="toggle-row">
 						<label class="toggle-label" class:disabled={selectedObject.isThread}>
@@ -345,22 +446,65 @@
 							<div class="thread-group">
 								<div class="thread-group-header">
 									In Thread ({cardsInThread.length})
+									{#if hasSubthreads}
+										<span class="subthread-hint">Click to set subthread targeting</span>
+									{/if}
 								</div>
 								<div class="thread-cards-list">
 									{#each cardsInThread as card (card.id)}
-										<div class="thread-card-row">
-											<input
-												type="checkbox"
-												checked={true}
-												onchange={() => handleToggleCardInThread(card.id, true)}
-											/>
-											<span class="card-icon">{objects.getEffectiveIcon(card.id)}</span>
-											<button
-												class="card-name"
-												onclick={() => handleNavigateToCard(card.id)}
-											>
-												{card.name}
-											</button>
+										{@const isExpanded = expandedCardIds.has(card.id)}
+										{@const cardSubthreads = getCardSubthreads(card.id)}
+										{@const isFullThread = cardSubthreads.length === 0}
+										<div class="thread-card-wrapper" class:expanded={isExpanded}>
+											<div class="thread-card-row" class:has-subthreads={hasSubthreads}>
+												<input
+													type="checkbox"
+													checked={true}
+													onchange={() => handleToggleCardInThread(card.id, true)}
+												/>
+												<span class="card-icon">{objects.getEffectiveIcon(card.id)}</span>
+												<button
+													class="card-name"
+													onclick={() => handleNavigateToCard(card.id)}
+												>
+													{card.name}
+												</button>
+												{#if hasSubthreads}
+													<span class="subthread-badge" class:full={isFullThread}>
+														{isFullThread ? 'Full' : cardSubthreads.length}
+													</span>
+													<button
+														class="expand-btn"
+														onclick={() => toggleCardExpanded(card.id)}
+														title={isExpanded ? 'Collapse' : 'Expand subthread options'}
+													>
+														{isExpanded ? '▼' : '▶'}
+													</button>
+												{/if}
+											</div>
+											{#if hasSubthreads && isExpanded}
+												<div class="subthread-options">
+													<label class="subthread-option">
+														<input
+															type="radio"
+															name="subthread-{card.id}"
+															checked={isFullThread}
+															onchange={() => setCardToFullThread(card.id)}
+														/>
+														<span>Full thread</span>
+													</label>
+													{#each threadSections as section (section.id)}
+														<label class="subthread-option">
+															<input
+																type="checkbox"
+																checked={cardTargetsSubthread(card.id, section.id)}
+																onchange={() => toggleSubthreadForCard(card.id, section.id)}
+															/>
+															<span>{section.name}</span>
+														</label>
+													{/each}
+												</div>
+											{/if}
 										</div>
 									{/each}
 								</div>
@@ -920,6 +1064,94 @@
 		margin: var(--space-sm) 0;
 	}
 
+	/* Subthread targeting UI */
+	.subthread-hint {
+		font-size: var(--font-size-xs);
+		font-weight: 400;
+		color: var(--text-muted);
+		margin-left: auto;
+	}
+
+	.thread-card-wrapper {
+		border-radius: var(--radius-sm);
+		transition: background-color var(--transition-fast);
+	}
+
+	.thread-card-wrapper.expanded {
+		background-color: var(--surface-sunken);
+	}
+
+	.thread-card-row.has-subthreads {
+		cursor: pointer;
+	}
+
+	.subthread-badge {
+		font-size: var(--font-size-xs);
+		font-weight: 500;
+		padding: 1px 6px;
+		border-radius: 8px;
+		background-color: var(--color-primary);
+		color: white;
+		flex-shrink: 0;
+	}
+
+	.subthread-badge.full {
+		background-color: var(--surface-sunken);
+		color: var(--text-secondary);
+	}
+
+	.expand-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		padding: 0;
+		font-size: 0.5rem;
+		color: var(--text-tertiary);
+		background: transparent;
+		border: none;
+		border-radius: 2px;
+		cursor: pointer;
+		flex-shrink: 0;
+		transition: all 0.15s ease;
+	}
+
+	.expand-btn:hover {
+		color: var(--text-primary);
+		background: var(--hover-bg);
+	}
+
+	.subthread-options {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding: var(--space-xs) var(--space-sm);
+		padding-left: calc(14px + var(--space-sm) + var(--space-sm));
+		border-top: 1px solid var(--border-subtle);
+	}
+
+	.subthread-option {
+		display: flex;
+		align-items: center;
+		gap: var(--space-sm);
+		padding: 2px 0;
+		font-size: var(--font-size-sm);
+		color: var(--text-secondary);
+		cursor: pointer;
+	}
+
+	.subthread-option:hover {
+		color: var(--text-primary);
+	}
+
+	.subthread-option input[type='radio'],
+	.subthread-option input[type='checkbox'] {
+		width: 14px;
+		height: 14px;
+		flex-shrink: 0;
+	}
+
 	/* Aliases Section */
 	.aliases-container {
 		display: flex;
@@ -1213,5 +1445,86 @@
 	.delete-btn:hover {
 		background-color: var(--color-error);
 		color: white;
+	}
+
+	/* Sections management */
+	.sections-list {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-xs);
+		margin-bottom: var(--space-sm);
+	}
+
+	.section-item {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: var(--space-xs) var(--space-sm);
+		background-color: var(--surface-sunken);
+		border-radius: var(--radius-sm);
+	}
+
+	.section-name {
+		font-size: var(--font-size-sm);
+		font-weight: 500;
+		color: var(--text-primary);
+	}
+
+	.section-remove-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px;
+		height: 20px;
+		font-size: 14px;
+		color: var(--text-muted);
+		background: none;
+		border: none;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		opacity: 0;
+		transition: all var(--transition-fast);
+	}
+
+	.section-item:hover .section-remove-btn {
+		opacity: 1;
+	}
+
+	.section-remove-btn:hover {
+		color: var(--color-error, #ef4444);
+		background-color: color-mix(in srgb, var(--color-error, #ef4444) 10%, transparent);
+	}
+
+	.sections-empty {
+		font-size: var(--font-size-sm);
+		color: var(--text-muted);
+		text-align: center;
+		padding: var(--space-sm);
+	}
+
+	.add-section-btn {
+		width: 100%;
+		padding: var(--space-sm);
+		font-size: var(--font-size-sm);
+		color: var(--text-secondary);
+		background: none;
+		border: 1px dashed var(--border-subtle);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition: all var(--transition-fast);
+	}
+
+	.add-section-btn:hover {
+		border-color: var(--color-primary);
+		color: var(--color-primary);
+		border-style: solid;
+	}
+
+	.sections-hint {
+		display: block;
+		margin-top: var(--space-sm);
+		font-size: var(--font-size-xs);
+		color: var(--text-muted);
+		line-height: 1.4;
 	}
 </style>

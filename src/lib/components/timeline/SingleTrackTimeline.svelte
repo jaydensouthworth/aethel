@@ -332,11 +332,19 @@
   });
 
   // Visible thread info (for rendering thread rows)
+  interface SubthreadInfo {
+    sectionId: string;
+    name: string;
+    slotIds: string[]; // Which slot groups this subthread spans
+  }
+
   interface ThreadInfo {
     threadId: string;
     color: string;
     name: string;
     slotIds: string[]; // Which slot groups this thread spans
+    hasSubthreads: boolean;
+    subthreads: SubthreadInfo[];
   }
 
   const visibleThreads = $derived.by(() => {
@@ -352,12 +360,27 @@
         }
       }
 
+      // Check if thread object has sections (subthreads)
+      const sections = objects.getSections(threadId);
+      const hasSubthreads = sections.length > 0;
+
+      // Build subthread info for each section
+      const subthreads: SubthreadInfo[] = sections.map(section => ({
+        sectionId: section.id,
+        name: section.name,
+        // For now, subthreads inherit parent's slot coverage
+        // Future: filter by subthreadIds on placements
+        slotIds: [...slotIds],
+      }));
+
       // Include thread even if no slots - it will show as inactive
       threads.push({
         threadId,
         color: objects.getEffectiveThreadColor(threadId),
         name: threadObj.name,
         slotIds,
+        hasSubthreads,
+        subthreads,
       });
     }
     return threads;
@@ -429,8 +452,17 @@
     requestAnimationFrame(() => measureThreadPositions());
   });
 
-  // Thread row count for CSS variable
-  const threadRowCount = $derived(visibleThreads.length);
+  // Thread row count for CSS variable (includes expanded subthreads)
+  const threadRowCount = $derived.by(() => {
+    let count = 0;
+    for (const thread of visibleThreads) {
+      count++; // Parent thread row
+      if (thread.hasSubthreads && timelineEditor.isThreadExpanded(thread.threadId)) {
+        count += thread.subthreads.length; // Subthread rows
+      }
+    }
+    return count;
+  });
 
   // Svelte action to register card group elements for measurement
   function registerCardGroup(node: HTMLDivElement, slotId: string) {
@@ -990,22 +1022,85 @@
 
         <!-- Thread rows - inside scroll so they align with cards -->
         {#if threadRowCount > 0 && threadRowsExpanded}
+          {@const rowPositions = (() => {
+            const positions: Array<{
+              type: 'thread' | 'subthread';
+              threadId: string;
+              sectionId?: string;
+              row: number;
+              thread: typeof visibleThreads[0];
+              measured: typeof measuredThreads[0] | undefined;
+              subthread?: SubthreadInfo;
+            }> = [];
+            let row = 0;
+            for (const thread of visibleThreads) {
+              const measured = measuredThreads.find(m => m.threadId === thread.threadId);
+              positions.push({ type: 'thread', threadId: thread.threadId, row, thread, measured });
+              row++;
+              if (thread.hasSubthreads && timelineEditor.isThreadExpanded(thread.threadId)) {
+                for (const sub of thread.subthreads) {
+                  positions.push({
+                    type: 'subthread',
+                    threadId: thread.threadId,
+                    sectionId: sub.sectionId,
+                    row,
+                    thread,
+                    measured,
+                    subthread: sub
+                  });
+                  row++;
+                }
+              }
+            }
+            return positions;
+          })()}
           <div class="thread-rows" style:--thread-count={threadRowCount}>
-            {#each measuredThreads as thread, i (thread.threadId)}
-              <div class="thread-row" style:top="{i * 1.5}rem">
-                <span class="thread-label" style:--thread-color={thread.color}>{thread.name}</span>
-                <div class="thread-track">
-                  <div class="thread-base"></div>
-                  {#if thread.hasActiveSpan}
-                    <div
-                      class="thread-active"
-                      style:left="{thread.activeLeftPx}px"
-                      style:width="{thread.activeWidthPx}px"
-                      style:background={thread.color}
-                    ></div>
-                  {/if}
+            {#each rowPositions as pos (pos.type === 'thread' ? pos.threadId : `${pos.threadId}-${pos.sectionId}`)}
+              {#if pos.type === 'thread'}
+                <div class="thread-row" style:top="{pos.row * 1.5}rem">
+                  <span class="thread-label" style:--thread-color={pos.thread.color}>
+                    {#if pos.thread.hasSubthreads}
+                      <button
+                        class="subthread-toggle"
+                        onclick={() => timelineEditor.toggleThreadExpanded(pos.threadId)}
+                        title={timelineEditor.isThreadExpanded(pos.threadId) ? 'Collapse subthreads' : 'Expand subthreads'}
+                      >
+                        {timelineEditor.isThreadExpanded(pos.threadId) ? '▼' : '▶'}
+                      </button>
+                    {/if}
+                    {pos.thread.name}
+                  </span>
+                  <div class="thread-track">
+                    <div class="thread-base"></div>
+                    {#if pos.measured?.hasActiveSpan}
+                      <div
+                        class="thread-active"
+                        style:left="{pos.measured.activeLeftPx}px"
+                        style:width="{pos.measured.activeWidthPx}px"
+                        style:background={pos.thread.color}
+                      ></div>
+                    {/if}
+                  </div>
                 </div>
-              </div>
+              {:else}
+                <!-- Subthread row (indented) -->
+                <div class="thread-row subthread-row" style:top="{pos.row * 1.5}rem">
+                  <span class="thread-label subthread-label" style:--thread-color={pos.thread.color}>
+                    {pos.subthread?.name}
+                  </span>
+                  <div class="thread-track">
+                    <div class="thread-base subthread-base"></div>
+                    {#if pos.measured?.hasActiveSpan}
+                      <div
+                        class="thread-active subthread-active"
+                        style:left="{pos.measured.activeLeftPx}px"
+                        style:width="{pos.measured.activeWidthPx}px"
+                        style:background={pos.thread.color}
+                      ></div>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             {/each}
           </div>
         {/if}
@@ -1225,6 +1320,48 @@
     z-index: 3;
     background: var(--surface-base);
     padding-right: var(--space-sm);
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .subthread-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    font-size: 0.5rem;
+    color: var(--text-tertiary);
+    background: transparent;
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+  }
+  .subthread-toggle:hover {
+    color: var(--thread-color);
+    background: var(--hover-bg);
+  }
+
+  .subthread-row {
+    opacity: 0.85;
+  }
+
+  .subthread-label {
+    padding-left: 14px;
+    font-weight: 400;
+    font-size: 0.625rem;
+  }
+
+  .subthread-base {
+    opacity: 0.3;
+  }
+
+  .subthread-active {
+    opacity: 0.7;
   }
 
   .thread-track {

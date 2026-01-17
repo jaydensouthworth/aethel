@@ -3,8 +3,8 @@
  * Uses Svelte 5 Runes for reactivity
  */
 
-import type { AethelObject } from '$lib/types';
-import { createObject, getObjectType } from '$lib/types';
+import type { AethelObject, ObjectSection } from '$lib/types';
+import { createObject, createSection, getObjectType } from '$lib/types';
 
 class ObjectsStore {
   // ============================================================================
@@ -183,6 +183,109 @@ class ObjectsStore {
     const obj = this._objectsById[objectId];
     if (!obj) return '#78716c';
     return obj.threadColor ?? obj.color ?? getObjectType(obj.typeId).color;
+  }
+
+  // ============================================================================
+  // Section Operations (Multiple Text Contexts)
+  // ============================================================================
+
+  /**
+   * Get sorted sections for an object
+   */
+  getSections(objectId: string): ObjectSection[] {
+    const obj = this._objectsById[objectId];
+    if (!obj?.sections) return [];
+    return [...obj.sections].sort((a, b) => a.sortOrder - b.sortOrder);
+  }
+
+  /**
+   * Get a specific section by ID
+   */
+  getSection(objectId: string, sectionId: string): ObjectSection | undefined {
+    const obj = this._objectsById[objectId];
+    return obj?.sections?.find((s) => s.id === sectionId);
+  }
+
+  /**
+   * Add a new section to an object
+   */
+  addSection(objectId: string, name: string): ObjectSection | null {
+    const obj = this._objectsById[objectId];
+    if (!obj) return null;
+
+    const existing = obj.sections ?? [];
+    const maxOrder = existing.reduce((max, s) => Math.max(max, s.sortOrder), 0);
+    const section = createSection(name, maxOrder + 1);
+
+    this.update(objectId, {
+      sections: [...existing, section],
+    });
+
+    return section;
+  }
+
+  /**
+   * Update a section's properties (name, content, sortOrder)
+   */
+  updateSection(
+    objectId: string,
+    sectionId: string,
+    updates: Partial<Omit<ObjectSection, 'id' | 'createdAt'>>
+  ): void {
+    const obj = this._objectsById[objectId];
+    if (!obj?.sections) return;
+
+    const newSections = obj.sections.map((s) =>
+      s.id === sectionId
+        ? { ...s, ...updates, updatedAt: new Date().toISOString() }
+        : s
+    );
+
+    this.update(objectId, { sections: newSections });
+  }
+
+  /**
+   * Remove a section from an object
+   */
+  removeSection(objectId: string, sectionId: string): void {
+    const obj = this._objectsById[objectId];
+    if (!obj?.sections) return;
+
+    this.update(objectId, {
+      sections: obj.sections.filter((s) => s.id !== sectionId),
+    });
+  }
+
+  /**
+   * Reorder sections within an object
+   */
+  reorderSections(objectId: string, sectionIds: string[]): void {
+    const obj = this._objectsById[objectId];
+    if (!obj?.sections) return;
+
+    const newSections = obj.sections.map((s) => {
+      const newOrder = sectionIds.indexOf(s.id);
+      return newOrder >= 0 ? { ...s, sortOrder: newOrder } : s;
+    });
+
+    this.update(objectId, { sections: newSections });
+  }
+
+  /**
+   * Check if a thread object has subthreads (sections)
+   */
+  hasSubthreads(objectId: string): boolean {
+    const obj = this._objectsById[objectId];
+    return Boolean(obj?.isThread && obj.sections && obj.sections.length > 0);
+  }
+
+  /**
+   * Get subthreads (sections) for a thread object
+   */
+  getSubthreads(threadObjectId: string): ObjectSection[] {
+    const obj = this._objectsById[threadObjectId];
+    if (!obj?.isThread || !obj.sections) return [];
+    return this.getSections(threadObjectId);
   }
 
   // ============================================================================

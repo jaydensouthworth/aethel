@@ -340,6 +340,47 @@ class TimelineEditorStore {
   }
 
   // ============================================================================
+  // v2 Thread Expansion (for subthreads)
+  // ============================================================================
+
+  // Track which threads are expanded to show subthread lanes
+  expandedThreadIds = $state<Set<string>>(new Set());
+
+  /**
+   * Expand a thread to show its subthread lanes
+   */
+  expandThread(threadId: string): void {
+    this.expandedThreadIds = new Set([...this.expandedThreadIds, threadId]);
+  }
+
+  /**
+   * Collapse a thread to hide its subthread lanes
+   */
+  collapseThread(threadId: string): void {
+    const newSet = new Set(this.expandedThreadIds);
+    newSet.delete(threadId);
+    this.expandedThreadIds = newSet;
+  }
+
+  /**
+   * Toggle thread expansion
+   */
+  toggleThreadExpanded(threadId: string): void {
+    if (this.expandedThreadIds.has(threadId)) {
+      this.collapseThread(threadId);
+    } else {
+      this.expandThread(threadId);
+    }
+  }
+
+  /**
+   * Check if a thread is expanded
+   */
+  isThreadExpanded(threadId: string): boolean {
+    return this.expandedThreadIds.has(threadId);
+  }
+
+  // ============================================================================
   // v2 Drag Operations
   // ============================================================================
 

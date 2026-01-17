@@ -182,12 +182,14 @@
 
   // Update content when prop changes externally
   $effect(() => {
-    if (ctx.editor && content) {
-      const currentContent = JSON.stringify(ctx.editor.getJSON());
-      const newContent = JSON.stringify(content);
-      if (currentContent !== newContent) {
-        ctx.editor.commands.setContent(content);
-      }
+    if (!ctx.editor) return;
+
+    const currentContent = JSON.stringify(ctx.editor.getJSON());
+    const newContent = content ? JSON.stringify(content) : '{"type":"doc","content":[]}';
+
+    if (currentContent !== newContent) {
+      // Set content or clear to empty doc if content is null
+      ctx.editor.commands.setContent(content ?? { type: 'doc', content: [] });
     }
   });
 </script>

@@ -149,6 +149,45 @@ class UIStore {
   }
 
   // ============================================================================
+  // Active Section (for multi-section objects)
+  // ============================================================================
+
+  // Track which section is active for each object
+  // Using a simple record for better reactivity (Maps can be tricky in Svelte 5)
+  activeSectionByObject = $state<Record<string, string>>({});
+
+  /**
+   * Set the active section for an object
+   * Creates a new object reference to ensure reactivity triggers
+   */
+  setActiveSection(objectId: string, sectionId: string | null): void {
+    if (sectionId) {
+      this.activeSectionByObject = {
+        ...this.activeSectionByObject,
+        [objectId]: sectionId,
+      };
+    } else {
+      const { [objectId]: _, ...rest } = this.activeSectionByObject;
+      this.activeSectionByObject = rest;
+    }
+  }
+
+  /**
+   * Get the active section ID for an object (or null for default)
+   */
+  getActiveSection(objectId: string): string | null {
+    return this.activeSectionByObject[objectId] ?? null;
+  }
+
+  /**
+   * Clear active section for an object (revert to first section)
+   */
+  clearActiveSection(objectId: string): void {
+    const { [objectId]: _, ...rest } = this.activeSectionByObject;
+    this.activeSectionByObject = rest;
+  }
+
+  // ============================================================================
   // Bulk Operations (for serialization)
   // ============================================================================
 
