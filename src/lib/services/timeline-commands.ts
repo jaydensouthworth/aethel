@@ -389,6 +389,31 @@ export function createChangeMutationDisplayCommand(
 // ============================================================================
 
 /**
+ * Toggle an object's thread status
+ */
+export function createToggleThreadCommand(objectId: string): TimelineCommand {
+	const obj = objects.get(objectId);
+	if (!obj) {
+		throw new Error(`Object ${objectId} not found`);
+	}
+
+	const wasThread = obj.isThread ?? false;
+	const originalThreadColor = obj.threadColor;
+
+	return {
+		id: crypto.randomUUID(),
+		type: 'toggle-thread',
+		description: wasThread ? `Remove "${obj.name}" as thread` : `Set "${obj.name}" as thread`,
+		execute: () => {
+			objects.update(objectId, { isThread: !wasThread });
+		},
+		undo: () => {
+			objects.update(objectId, { isThread: wasThread, threadColor: originalThreadColor });
+		},
+	};
+}
+
+/**
  * Toggle an object's rendered status (adds/removes from timeline cards)
  */
 export function createToggleRenderedCommand(objectId: string): TimelineCommand {

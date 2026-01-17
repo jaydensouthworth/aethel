@@ -22,6 +22,7 @@ import {
 	createMoveMilestoneCommand,
 	createChangeMutationDisplayCommand,
 	createToggleRenderedCommand,
+	createToggleThreadCommand,
 	// Drag-drop commands
 	createReorderCardCommand,
 	createMoveMutationCommand,
@@ -94,6 +95,72 @@ export function toggleRendered(objectId: string): void {
 	const command = createUpdateObjectCommand(objectId, {
 		rendered: !object.rendered,
 	});
+	timelineHistory.execute(command);
+}
+
+// ============================================================================
+// Object Property Operations (for Properties Panel)
+// ============================================================================
+
+/**
+ * Update object name with undo support
+ */
+export function updateObjectName(objectId: string, name: string): void {
+	const command = createUpdateObjectCommand(objectId, { name });
+	timelineHistory.execute(command);
+}
+
+/**
+ * Update object color with undo support
+ */
+export function updateObjectColor(objectId: string, color: string | undefined): void {
+	const command = createUpdateObjectCommand(objectId, { color });
+	timelineHistory.execute(command);
+}
+
+/**
+ * Update object icon with undo support
+ */
+export function updateObjectIcon(objectId: string, icon: string | undefined): void {
+	const command = createUpdateObjectCommand(objectId, { icon });
+	timelineHistory.execute(command);
+}
+
+/**
+ * Toggle thread status with undo support
+ */
+export function toggleObjectThread(objectId: string): void {
+	const command = createToggleThreadCommand(objectId);
+	timelineHistory.execute(command);
+}
+
+/**
+ * Update thread color with undo support
+ */
+export function updateThreadColor(objectId: string, color: string): void {
+	const command = createUpdateObjectCommand(objectId, { threadColor: color });
+	timelineHistory.execute(command);
+}
+
+/**
+ * Add alias with undo support
+ */
+export function addObjectAlias(objectId: string, alias: string): void {
+	const obj = objects.get(objectId);
+	if (!obj) return;
+	const newAliases = [...obj.aliases, alias];
+	const command = createUpdateObjectCommand(objectId, { aliases: newAliases });
+	timelineHistory.execute(command);
+}
+
+/**
+ * Remove alias with undo support
+ */
+export function removeObjectAlias(objectId: string, index: number): void {
+	const obj = objects.get(objectId);
+	if (!obj) return;
+	const newAliases = obj.aliases.filter((_, i) => i !== index);
+	const command = createUpdateObjectCommand(objectId, { aliases: newAliases });
 	timelineHistory.execute(command);
 }
 

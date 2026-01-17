@@ -678,6 +678,35 @@ class TimelineStore {
     return this.getPlacement(placementId)?.threadIds ?? [];
   }
 
+  /**
+   * Get rendered cards that have any placements in a thread
+   * Used for showing "In Thread" section in properties panel
+   */
+  getCardsInThread(threadId: string): AethelObject[] {
+    const placementsInThread = this.getPlacementsInThread(threadId);
+    const objectIds = new Set<string>();
+
+    for (const p of placementsInThread) {
+      // For 'below' mutations, include the card they're attached to
+      if (p.mutationDisplay === 'below' && p.attachedToObjectId) {
+        objectIds.add(p.attachedToObjectId);
+      }
+      // Also include the object the placement belongs to
+      objectIds.add(p.objectId);
+    }
+
+    return this.renderedObjects.filter((obj) => objectIds.has(obj.id));
+  }
+
+  /**
+   * Get rendered cards that are NOT in a thread
+   * Used for showing "Available to Add" section in properties panel
+   */
+  getCardsNotInThread(threadId: string): AethelObject[] {
+    const inThreadIds = new Set(this.getCardsInThread(threadId).map((c) => c.id));
+    return this.renderedObjects.filter((obj) => !inThreadIds.has(obj.id));
+  }
+
   // ============================================================================
   // Bulk Operations
   // ============================================================================

@@ -307,6 +307,15 @@
     for (const group of slotGroups) {
       const threadIds = new Set<string>();
       for (const card of group.cards) {
+        // Check the card's own placement (creation/reference) for thread membership
+        if (card.placement?.threadIds) {
+          for (const threadId of card.placement.threadIds) {
+            if (timelineEditor.isThreadVisible(threadId)) {
+              threadIds.add(threadId);
+            }
+          }
+        }
+        // Also check mutations below the card
         for (const mutation of card.mutationsBelow) {
           for (const threadId of mutation.threadIds ?? []) {
             if (timelineEditor.isThreadVisible(threadId)) {
@@ -448,19 +457,32 @@
     const stripes: Array<{ id: string; color: string; name: string }> = [];
     const seenThreads = new Set<string>();
 
+    // Helper to add thread stripe
+    const addThread = (threadId: string) => {
+      if (!seenThreads.has(threadId)) {
+        seenThreads.add(threadId);
+        const threadObj = objects.get(threadId);
+        if (threadObj?.isThread && timelineEditor.isThreadVisible(threadId)) {
+          stripes.push({
+            id: threadId,
+            color: objects.getEffectiveThreadColor(threadId),
+            name: threadObj.name,
+          });
+        }
+      }
+    };
+
+    // Check the card's own placement (creation/reference)
+    if (card.placement?.threadIds) {
+      for (const threadId of card.placement.threadIds) {
+        addThread(threadId);
+      }
+    }
+
+    // Also check mutations below
     for (const mutation of card.mutationsBelow) {
       for (const threadId of mutation.threadIds ?? []) {
-        if (!seenThreads.has(threadId)) {
-          seenThreads.add(threadId);
-          const threadObj = objects.get(threadId);
-          if (threadObj?.isThread && timelineEditor.isThreadVisible(threadId)) {
-            stripes.push({
-              id: threadId,
-              color: objects.getEffectiveThreadColor(threadId),
-              name: threadObj.name,
-            });
-          }
-        }
+        addThread(threadId);
       }
     }
 

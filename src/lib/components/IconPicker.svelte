@@ -22,6 +22,10 @@
   let showPicker = $state(false);
   let customIcon = $state('');
 
+  // Computed display values
+  const displayIcon = $derived((value && value.trim()) ? value : (inheritedIcon ?? '📁'));
+  const isInherited = $derived(!value || !value.trim());
+
   $effect(() => {
     customIcon = value ?? '';
   });
@@ -60,12 +64,12 @@
 <div class="icon-picker">
   <button
     class="icon-swatch"
-    class:inherited={!value}
+    class:inherited={isInherited}
     onclick={() => showPicker = !showPicker}
-    title={value ? 'Custom icon' : 'Inherited icon (click to change)'}
+    title={isInherited ? 'Inherited icon (click to change)' : 'Custom icon'}
   >
-    <span class="icon-display">{value ?? inheritedIcon ?? '📁'}</span>
-    {#if !value}
+    <span class="icon-display">{displayIcon}</span>
+    {#if isInherited}
       <span class="inherit-indicator">*</span>
     {/if}
   </button>
